@@ -1,0 +1,8 @@
+~~~~~~~~~~
+This directory contains the scripts currently used for discards.
+The discard.pl recommends and will eventually perform the discard
+process, the discard_reports.pl will report what was converted 
+and update the finished_discards.txt file.
+
+The discard process will not work on any other machine than:
+eplapp.library.ualberta.ca
