@@ -108,8 +108,7 @@ usage: $0 [-xcrecq] [-n number_items] [-m email]
  -b BRAnch : request a specific branch for discards. Selecting a branch must
              be done by the 3-character prefix of the id of the card (WOO-DISCARDCA7
              would be 'WOO') and is case sensitive. Also all the cards from that
-             branch will be checked and converted (if -c was selected), even if
-             the total items on those cards exceed the daily allowed limit. 
+             branch will be checked and converted if -c was selected. 
  -c        : convert the recommended cards automatically.
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
