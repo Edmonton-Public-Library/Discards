@@ -107,9 +107,9 @@ usage: $0 [-xcrecq] [-n number_items] [-m email]
 
  -b BRAnch : request a specific branch for discards. Selecting a branch must
              be done by the 3-character prefix of the id of the card (WOO-DISCARDCA7
-			 would be 'WOO') and is case sensitive. Also all the cards from that
-			 branch will be checked and converted (if -c was selected), even if
-			 the total items on those cards exceed the daily allowed limit. 
+             would be 'WOO') and is case sensitive. Also all the cards from that
+             branch will be checked and converted (if -c was selected), even if
+             the total items on those cards exceed the daily allowed limit. 
  -c        : convert the recommended cards automatically.
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
@@ -218,8 +218,13 @@ foreach (@sortedCards)
     {
         $overLoadedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status Item Count = $itemCount";
     }
-	my $branchCode = substr($id, 3);
-    if (( $opt{'b'} and $opt{'b'} =~ m/($branchCode)/ ) or ( $itemCount <= $targetDicardItemCount and $dateConverted == 0 ))
+	# Test if we are looking for a specific branch and if this card doesn't match skip it.
+	my $branchCode = substr($id, 0, 3);
+    if ( $opt{'b'} and $opt{'b'} !~ m/($branchCode)/)
+	{
+		print "skipping $description\n";
+	}
+	elsif ( $itemCount <= $targetDicardItemCount and $dateConverted == 0 ) # else check if it matches the day's quotas.
     {
 		print "my branch code is $branchCode and $opt{'b'} was selected\n";
         if ($itemCount + $runningTotal <= $targetDicardItemCount)
