@@ -7,4 +7,6 @@ LOCAL=/home/ilsdev/projects/discards/
 get:
 	scp ${USER}@${SERVER}:${REMOTE}discard.pl ${LOCAL}
 	scp ${USER}@${SERVER}:${REMOTE}discard_reports.pl ${LOCAL}
-
+put:
+	scp ${LOCAL}discard.pl ${USER}@${SERVER}:${REMOTE}discard_reports.pl 
+	scp ${LOCAL}discard_reports.pl ${USER}@${SERVER}:${REMOTE}discard_reports.pl 
