@@ -103,7 +103,7 @@ sub usage()
 This script determines the recommended DISCARD cards to convert based on
 the user specified max number of items to process - default: 2000.
 
-usage: $0 [-xcrecq] [-n number_items] [-m email]
+usage: $0 [-xbrecq] [-n number_items] [-m email]
 
  -b BRAnch : request a specific branch for discards. Selecting a branch must
              be done by the 3-character prefix of the id of the card (WOO-DISCARDCA7
