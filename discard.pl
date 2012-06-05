@@ -105,18 +105,23 @@ the user specified max number of items to process - default: 2000.
 
 usage: $0 [-xcrecq] [-n number_items] [-m email]
 
- -c        : Convert the recommended cards automatically.
+ -b BRAnch : request a specific branch for discards. Selecting a branch must
+             be done by the 3-character prefix of the id of the card (WOO-DISCARDCA7
+			 would be 'WOO') and is case sensitive. Also all the cards from that
+			 branch will be checked and converted (if -c was selected), even if
+			 the total items on those cards exceed the daily allowed limit. 
+ -c        : convert the recommended cards automatically.
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
  -m "addrs": mail output to provided address
- -n        : sets the upper limit of the number of discards to process.
+ -n number : sets the upper limit of the number of discards to process.
  -q        : quiet mode, just print out the recommended cards. Email will still
              contain all stats.
  -r        : reset the list. Re-reads all discard cards and creates a new list.
              other flags have no effect.
  -x        : this (help) message
 
-example: $0 -ecq -n 1500 -m anisbet\@epl.ca
+example: $0 -ecq -n 1500 -m anisbet\@epl.ca -b MNA
 
 EOF
     exit;
@@ -127,7 +132,7 @@ EOF
 # return:
 sub init()
 {
-    my $opt_string = 'rm:n:xecq';
+    my $opt_string = 'rm:n:xeb:cq';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{x});                            # User needs help
     $targetDicardItemCount = $opt{'n'} if ($opt{n}); # User set n
@@ -213,8 +218,10 @@ foreach (@sortedCards)
     {
         $overLoadedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status Item Count = $itemCount";
     }
-    if ($itemCount <= $targetDicardItemCount and $dateConverted == 0)
+	my $branchCode = substr($id, 3);
+    if (( $opt{'b'} and $opt{'b'} =~ m/($branchCode)/ ) or ( $itemCount <= $targetDicardItemCount and $dateConverted == 0 ))
     {
+		print "my branch code is $branchCode and $opt{'b'} was selected\n";
         if ($itemCount + $runningTotal <= $targetDicardItemCount)
         {
             # update the running total
