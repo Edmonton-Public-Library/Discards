@@ -10,3 +10,6 @@ put:
 get:
 	scp ${USER}@${SERVER}:${REMOTE}discard.pl ${LOCAL}
 	scp ${USER}@${SERVER}:${REMOTE}discard_reports.pl ${LOCAL}
+test:
+	perl -c ${LOCAL}discard.pl
+	perl -c ${LOCAL}discard_reports.pl
