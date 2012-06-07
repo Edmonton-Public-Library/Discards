@@ -191,7 +191,7 @@ if ($opt{g})
 			$updated += 1;
 			$totalUpdated += 1;
         }
-		if ($record[9] > 0)
+		elsif ($record[9] > 0)
 		{
 			$totalUpdated += 1;
 		}
