@@ -221,11 +221,11 @@ foreach (@sortedCards)
 	my $branchCode = substr($id, 0, 3);
     if ( $opt{'b'} and $opt{'b'} !~ m/($branchCode)/)
 	{
-		print "skipping $description\n";
+		print "[Branch mode] skipping '$description'\n";
 	}
 	elsif ( $itemCount <= $targetDicardItemCount and $dateConverted == 0 ) # else check if it matches the day's quotas.
     {
-		print "my branch code is $branchCode and $opt{'b'} was selected\n";
+		#print "my branch code is $branchCode and $opt{'b'} was selected\n";
         if ($itemCount + $runningTotal <= $targetDicardItemCount)
         {
             # update the running total
