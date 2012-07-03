@@ -62,7 +62,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     0.0 - develop
-#
+#          July 3, 2012 - Cards available not reporting branches' barred cards
 #
 ########################################################################
 
@@ -81,7 +81,8 @@ my $mail                  = "";   # mail content.
 my %holdsCards;                   # list of cards that have holds on them
 my %overLoadedCards;              # cards that exceed the convert limit set with -n
 my %barCards;                     # List of cards that exceed 1000 items currently.
-my %okCards;                      # List of cards whose's status is OK (not BARRED).
+my %okCards;                      # List of cards whose status is OK (not BARRED).
+my %barredCards;                  # List of cards whose status is BARRED.
 my %billCards;                    # List of cards that have unpaid bills on them.
 my %misNamedCards;                # Cards that are given DISCARD profiles by mistake.
 my $today = `transdate -d+0`;
@@ -209,16 +210,20 @@ foreach (@sortedCards)
     {
         $billCards{$id} = $bills;
     }
+	my $branchCode = substr($id, 0, 3);
     if ($status eq "OK")
     {
-        $okCards{substr($id,0,3)} += 1;
+        $okCards{$branchCode} += 1;
     }
+	else
+	{
+		$barredCards{$branchCode} += 1;
+	}
     if ($itemCount > $targetDicardItemCount)
     {
         $overLoadedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status Item Count = $itemCount";
     }
 	# Test if we are looking for a specific branch and if this card doesn't match skip it.
-	my $branchCode = substr($id, 0, 3);
     if ( $opt{'b'} and $opt{'b'} !~ m/($branchCode)/)
 	{
 		print "[Branch mode] skipping '$description'\n";
@@ -270,6 +275,7 @@ $mail .= reportStatus("The following cards have bills:", %billCards);
 $mail .= reportStatus("The following cards are too big for quota:", %overLoadedCards);
 $mail .= reportStatus("The following cards have accidentally been given profile of DISCARD:", %misNamedCards);
 $mail .= reportStatus("Total available DISCARD cards:", %okCards);
+$mail .= reportStatus("Total barred DISCARD cards:", %barredCards);
 
 if (!$opt{q})
 {
