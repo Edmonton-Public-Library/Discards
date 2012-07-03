@@ -369,13 +369,17 @@ sub convertDiscards
 	# Item is accountable - N/A
 	#
 	# Sirsi does this via these commands:
+	
+	##############################
+	## This just gets the key for the DISCARD card so is not required.
 	# doCommand("seluser",
 			  # "-iB -c\"\>0\" -oK", 
 			  # $TempFiles{'dat'}, 
 			  # $TempFiles{'userKeys'},
 			  # $TempFiles{'c'},
 			  # \$Directives{'status'});
-	
+	##############################
+	## this lists all the items that are charged out to the discard card.
 	# doCommand("selcharge",
 			  # "-iU -oIy $Directives{'selchargeoptions'}", 
 			  # $TempFiles{'userKeys'},
@@ -383,6 +387,7 @@ sub convertDiscards
 			  # $TempFiles{'d'},
 			  # \$Directives{'status'});
 			  
+	## This outputs the items callnum key barcode and anything else to output
 	# doCommand("selitem",
             # "-iI -oNBS $Directives{'selitemoptions'}", 
             # $TempFiles{'chargeKeys'},
@@ -390,13 +395,14 @@ sub convertDiscards
             # $TempFiles{'e'},
             # \$Directives{'status'});
 			  
+	## this takes the callnum key as input and outputs the callnums' catalog key and anything else.
 	# doCommand("selcallnum",
 			  # "-iN -oCS $Directives{'selcallnumoptions'}", 
 			  # $TempFiles{'itemKeys'},
 			  # $TempFiles{'callnumKeys'},
 			  # $TempFiles{'g'},
 			  # \$Directives{'status'});
-			  
+	## This gives me the specific Barcode of the specific copy of the title.
 	# doCommand("selcatalog",
 			# "-iC -oS $Directives{'selcatalogoptions'}", 
 			# $TempFiles{'callnumKeys'},
@@ -421,6 +427,8 @@ sub convertDiscards
 
     # if ($Directives{'status'} == 0)
       # {
+	  ##############################
+	  # This takes the list of barcodes as input and then outputs nothing?????
       # doCommand("selitem",
                 # "-iB -c0", 
                 # $TempFiles{'items'},
