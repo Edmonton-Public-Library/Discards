@@ -238,12 +238,10 @@ foreach (@sortedCards)
 			# if convert not selected we will get the same recommendations tomorrow.
 			if ($opt{c})
 			{
-				my $updatedRecord = convertDiscards($_);
-				if ($updatedRecord ne "") # if conversion successful.
+				my $converted = convertDiscards($userKey);
+				if ($converted) # if conversion successful.
 				{
-					# update all the variables.
-					($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $updatedRecord);
-					$dateConverted = $today;
+					$dateConverted  = $today;
 					$convertedTotal += $converted; # change to the actual number converted items.
 				}
 			}
@@ -347,71 +345,31 @@ sub reportStatus
 
 
 # These functions perform the conversion if -c is used on the command line.
-# param: DISCARD record as: WOO-DISCARDCA5|659264|WOO-XXX DISCARD CAT ITEMS|20100112|20120430|581|0|0|BARRED|00000000|0|
-# return: String record as: WOO-DISCARDCA5|659264|WOO-XXX DISCARD CAT ITEMS|20100112|20120430|581|0|0|BARRED|20120510|500|
+# param:  User Key for discard card, like 659264.
+# return: integer number of cards converted.
 #         or an empty string on failure.
-sub convertDiscards
+sub convertDiscards($)
 {
-	my $card = @_;
-	my $status = 0;
-	print "CONVERTING: $card\n";
-	return "";
-	# The process of conversion does the following:
-	# discharge items from the users of profile DISCARD.
-	# Discharge items charged by intra-library loan - N/A
-	# Changes the current location of the item to DISCARD.
-	#
-	# Items are disqualified if they have:
-	# ** bills
-	# ** one or more copy level holds
-	# Items is on order - N/A
-	# Item is under serial control - N/A
-	# Item is accountable - N/A
-	#
-	# Sirsi does this via these commands:
+	my $cardKey         = shift;
+	my $status          = 0;
+	# my $date3MonthsBack = `transdate -m-3`;
+	my $date3MonthsBack = `transdate -d-0`;
+	chomp($date3MonthsBack);
+	print "CONVERTING: $cardKey\n";
 	
-	##############################
-	## This just gets the key for the DISCARD card so is not required.
-	# doCommand("seluser",
-			  # "-iB -c\"\>0\" -oK", 
-			  # $TempFiles{'dat'}, 
-			  # $TempFiles{'userKeys'},
-			  # $TempFiles{'c'},
-			  # \$Directives{'status'});
-	##############################
-	## this lists all the items that are charged out to the discard card.
-	# doCommand("selcharge",
-			  # "-iU -oIy $Directives{'selchargeoptions'}", 
-			  # $TempFiles{'userKeys'},
-			  # $TempFiles{'chargeKeys'},
-			  # $TempFiles{'d'},
-			  # \$Directives{'status'});
-			  
-	## This outputs the items callnum key barcode and anything else to output
-	# doCommand("selitem",
-            # "-iI -oNBS $Directives{'selitemoptions'}", 
-            # $TempFiles{'chargeKeys'},
-            # $TempFiles{'itemKeys'},
-            # $TempFiles{'e'},
-            # \$Directives{'status'});
-			  
-	## this takes the callnum key as input and outputs the callnums' catalog key and anything else.
-	# doCommand("selcallnum",
-			  # "-iN -oCS $Directives{'selcallnumoptions'}", 
-			  # $TempFiles{'itemKeys'},
-			  # $TempFiles{'callnumKeys'},
-			  # $TempFiles{'g'},
-			  # \$Directives{'status'});
-	## This gives me the specific Barcode of the specific copy of the title.
-	# doCommand("selcatalog",
-			# "-iC -oS $Directives{'selcatalogoptions'}", 
-			# $TempFiles{'callnumKeys'},
-			# $TempFiles{'items'},
-			# $TempFiles{'h'},
-			# \$Directives{'status'});
-			  
-	# Update_toDiscard();
-    
+	# Get the list of items on this card.
+	#                                    selcharge -iU -c"<20120601" -oIy | selitem -iI -oIB
+	my $apiCmd = qq{sirsiecho $cardKey | selcharge -iU -c"<$date3MonthsBack" -oIy | selitem -iI -oIB};
+    my $results = `$apiCmd`;
+	print "$results\n";
+	my @catKeyList = split("\n", $results);
+	
+	foreach my $catKey (@catKeyList)
+	{
+		print "$catKey\n";
+		# updateToDiscard($catKey);
+		return
+    }
     # #requested update of database records
 	# #sets up a log of the errors from the process we want this.
     # doCommand("apiserver",
@@ -421,54 +379,25 @@ sub convertDiscards
               # $TempFiles{'k'},
               # \$Directives{'status'});
 
-    # #Error messages from failed discharge transactions are found in the file
-    # PrintMessage("\$(14286)","$TempFiles{'k'}");
-    # system("sirsiecho \"$errlogdir/$Directives{'today_date'}.error\" >>$TempFiles{'k'}");
-
-    # if ($Directives{'status'} == 0)
-      # {
-	  ##############################
-	  # This takes the list of barcodes as input and then outputs nothing?????
-      # doCommand("selitem",
-                # "-iB -c0", 
-                # $TempFiles{'items'},
-                # $TempFiles{'keys'},
-                # $TempFiles{'l'},
-                # \$Directives{'status'});
-
       # #Capture item keys at selitem since edititem does not output keys
+	  ## changes the current location to DISCARD.
       # doCommand("edititem",
-                # "-8\"$Directives{'operatordata0'}|$Directives{'stationdata0'}\" -m\"DISCARD\"", 
+                # "-8\"ADMIN|PCGUI-DISP\" -m\"DISCARD\"", 
                 # $TempFiles{'keys'},
                 # $TempFiles{'m'},
                 # $TempFiles{'n'},
                 # \$Directives{'status'});
-
-      # if ($Directives{'status'} == 0)
-        # {
-        # chdir($textedit);
-        # CreateCatKeyFiles($TempFiles{'keys'});
-
-        # if ($browse_heading != 0) 
-          # {
-          # chdir($browsedit);
-          # CreateCatKeyFiles($TempFiles{'keys'});
-          # }
-        # }
-      # }
-    # }
+	#use touchkeys for textedit and browse edit.
+	print "would have returned ".@catKeyList." items converted.\n";
+	return 0; # returns the size of the list.
 }
 
-# sub Update_toDiscard()
-# {
-  # my $date;
-  # my $station;
-  # my $uacs;
-
-  # chomp($uacs = `sirsiecho $Directives{'operatordata0'} | seluser -iB -oP 2>$TempFiles{'j'}`);
-  # chomp($date = `transdate -d-0 -h`);
-  # $uacs =~ s/\|$//;
-  # $station = "001";
+sub updateToDiscard()
+{
+  my $date;
+  chomp($date = `transdate -d-0 -h`);
+  my $station = "PCGUI-DISP";
+  my $uacs    = "ADMIN";
 
   # if (!open(INFILE,$TempFiles{'items'}))
     # {
@@ -493,7 +422,7 @@ sub convertDiscards
   	# close INFILE;
   	# close OUTFILE;
     # }
-# }
+}
 
 
 
