@@ -91,10 +91,10 @@ my $address     = qq{};
 # return:
 sub init()
 {
-    my $opt_string = 'xd:g:m:w:v';
+    my $opt_string = 'xvd:g:m:w:';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{x});
-    $date = $opt{'d'} if ($opt{d});
+    $date = $opt{'d'} if ($opt{'d'});
 }
 
 init();
@@ -209,8 +209,9 @@ if ($opt{g})
 }
 
 # keep looping for the entry in the print list by date until time runs out
-# or you find it the removed report.
-if ($opt{w})
+# or you find it the removed report. This will fail in the rare corner case whern you have already run
+# more than one remove discard report.
+if ($opt{'w'})
 {
     my $numLoops = $opt{'w'};
     while ($numLoops > 0)
