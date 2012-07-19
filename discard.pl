@@ -63,6 +63,7 @@
 # Date:    April 10, 2012
 # Rev:     0.0 - develop
 #          July 3, 2012 - Cards available not reporting branches' barred cards
+#          July 19, 2012 - Added '-fggddnn' and made consistent opt quoting.
 #
 ########################################################################
 
