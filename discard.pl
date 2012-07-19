@@ -308,7 +308,7 @@ if ($opt{'e'})
 {
     sysopen(CARDS, $discardsFile, O_RDONLY) ||
         die "Couldn't read '$discardsFile' because of failure: $!\n";
-    open(EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o Discards$today.xls")
+    open(EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o Discards$today.xls -fggddnn")
         || die "excel.pl failed: $!\n";
     while (<CARDS>)
     {
