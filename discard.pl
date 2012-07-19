@@ -134,8 +134,8 @@ sub init()
 {
     my $opt_string = 'rm:n:xeb:cq';
     getopts( "$opt_string", \%opt ) or usage();
-    usage() if ($opt{x});                            # User needs help
-    $targetDicardItemCount = $opt{'n'} if ($opt{n}); # User set n
+    usage() if ($opt{'x'});                            # User needs help
+    $targetDicardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
     if ($opt{'r'})
     {
         my $apiCmd = qq{seluser -p"DISCARD" -oUBDfachb | seluserstatus -iU -oUSj | selascii -iR -oF2F1F3F4F5F6F7F8F9};
@@ -236,7 +236,7 @@ foreach (@sortedCards)
             # update the running total
             $runningTotal += $itemCount;
 			# if convert not selected we will get the same recommendations tomorrow.
-			if ($opt{c})
+			if ($opt{'c'})
 			{
 				my $converted = convertDiscards($userKey);
 				if ($converted) # if conversion successful.
@@ -275,7 +275,7 @@ $mail .= reportStatus("The following cards have accidentally been given profile 
 $mail .= reportStatus("Total available DISCARD cards:", %okCards);
 $mail .= reportStatus("Total barred DISCARD cards:", %barredCards);
 
-if (!$opt{q})
+if (!$opt{'q'})
 {
 	print "$mail\n";
 }
@@ -290,7 +290,7 @@ print "=== snip ===\n";
 
 ################
 # Mail the results to the recipients.
-if ($opt{m})
+if ($opt{'m'})
 {
     #-- send an email to user@localhost
     my $subject = qq{"Discard"};
@@ -304,7 +304,7 @@ if ($opt{m})
 # for excel.pl to be executable in custombin.
 # param: none
 # return: none
-if ($opt{e})
+if ($opt{'e'})
 {
     sysopen(CARDS, $discardsFile, O_RDONLY) ||
         die "Couldn't read '$discardsFile' because of failure: $!\n";
