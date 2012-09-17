@@ -61,7 +61,10 @@
 #
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
-# Rev:     0.0 - develop
+# Rev:     
+#          1.5 - APIConverts incorporated.
+#          1.0 - Production
+#          0.0 - develop
 #          July 3, 2012 - Cards available not reporting branches' barred cards
 #          July 19, 2012 - Added '-fggddnn' and made consistent opt quoting.
 #
@@ -75,6 +78,7 @@ use Getopt::Std;
 use Fcntl;          # Needed for sysopen flags O_WRONLY etc.
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 
+my $VERSION               = 1.5;
 my $targetDicardItemCount = 2000;
 # This value is used needed because not all converted items get discarded.
 my $fudgeFactor           = 0.1;  # percentage of items permitted over target limit.
@@ -105,7 +109,7 @@ sub usage()
 This script determines the recommended DISCARD cards to convert based on
 the user specified max number of items to process - default: 2000.
 
-usage: $0 [-xbrecq] [-n number_items] [-m email]
+usage: $0 [-xbrecq] [-n number_items] [-m email] [-t cardKey]
 
  -b BRAnch : request a specific branch for discards. Selecting a branch must
              be done by the 3-character prefix of the id of the card (WOO-DISCARDCA7
@@ -120,20 +124,143 @@ usage: $0 [-xbrecq] [-n number_items] [-m email]
              contain all stats.
  -r        : reset the list. Re-reads all discard cards and creates a new list.
              other flags have no effect.
+ -t cardKey: convert the card with this key.
  -x        : this (help) message
 
 example: $0 -ecq -n 1500 -m anisbet\@epl.ca -b MNA
+Version: $VERSION
 
 EOF
     exit;
 }
+
+# These functions perform the conversion if -c is used on the command line.
+# param:  User Key for discard card, like 659264.
+# return: integer number of cards converted or zero if none or on failure.
+sub convertDiscards($)
+{
+	my $cardKey         = shift;
+	my $status          = 0;
+	# my $date3MonthsBack = `transdate -d-90`;
+	my $date3MonthsBack = `transdate -d-0`; # just for testing.
+	chomp($date3MonthsBack);
+	print "CONVERTING: $cardKey\n";
+	selectItemsToDelete( $cardKey, $date3MonthsBack );
+    # #requested update of database records
+	# #sets up a log of the errors from the process we want this.
+    # doCommand("apiserver",
+              # "-h -e$errlogdir", 
+              # $TempFiles{'trans'},
+              # $TempFiles{'trans_response'},
+              # $TempFiles{'k'},
+              # \$Directives{'status'});
+
+      # #Capture item keys at selitem since edititem does not output keys
+	  ## changes the current location to DISCARD.
+      # doCommand("edititem",
+                # "-8\"ADMIN|PCGUI-DISP\" -m\"DISCARD\"", 
+                # $TempFiles{'keys'},
+                # $TempFiles{'m'},
+                # $TempFiles{'n'},
+                # \$Directives{'status'});
+	#use touchkeys for textedit and browse edit.
+	return $status; # returns the size of the list.
+}
+
+#
+#
+#
+sub selectItemsToDelete
+{
+	my ( $cardKey, $cutoffDate ) = @_;
+	print "checking holds\n";
+    my $holdHashRef = getHolds( $cardKey );
+	# Get the list of items on this card from 90 days ago (as per EPL policy).
+	#                                           selcharge -iU -c"<20120601"         -oIy | selitem -iI -oIB
+    my $itemListResults = `sirsiecho $cardKey | selcharge -iU -c"<$cutoffDate" -oIy | selitem -iI -oIB 2>/dev/null`;
+	my @itemKeyBarcodeList = split("\n", $itemListResults);
+	my $discardItemKeysFile = qq{discard_item_keys.lst};
+	my $discardItemHoldKeysFile = qq{discard_items_on_hold.lst};
+	open( ITEM_KEYS, ">$discardItemKeysFile" ) or die "Error writing to '$discardItemKeysFile': $!\n";
+	open( ITEM_HOLDS, ">$discardItemHoldKeysFile" ) or die "Error writing to '$discardItemHoldKeysFile': $!\n";
+	foreach my $line (@itemKeyBarcodeList)
+	{
+		my ( $catKey, $callSeq, $copyNumber, $barCode ) = split( '\|', $line );
+		if ( $holdHashRef->{ "$catKey|$callSeq|$copyNumber|" } )
+		{
+			print "Hold: $catKey Call sequence: $callSeq Copy number: $copyNumber\n";
+			print ITEM_HOLDS "$catKey|$callSeq|$copyNumber|\n";
+		}
+		else
+		{
+			print           "$catKey|$callSeq|$copyNumber|\n";
+			print ITEM_KEYS "$catKey|$callSeq|$copyNumber|\n";
+		}
+    }
+	close( ITEM_KEYS );
+	close( ITEM_HOLDS );
+	# TODO get the list of bills do a 'not' on the list of keys with diff.pl!!
+}
+
+# Returns a table of all ACTIVE holds for this user key.
+# param:  user key string - the user key of the discard card.
+# return: hash reference of all the items on the user's card that have active holds. 
+#         May be empty but not undefined.
+sub getHolds($)
+{
+	my $cardKey = shift;
+	my $holdResults =   `sirsiecho $cardKey | selhold -iU            -oI 2>/dev/null`; # for testing.
+	# my $holdResults = `sirsiecho $cardKey | selhold -iU -j"ACTIVE" -oI 2>/dev/null`;
+	my @holdItemList = split("\n", $holdResults);
+	my $hashRef = {};
+	foreach my $itemKey ( @holdItemList )
+	{
+		chomp( $itemKey );
+		$hashRef->{ $itemKey } = 1;
+	}
+	return $hashRef;
+}
+
+sub recordDiscardTransaction
+{
+	my ( $catKey, $callSeq, $copyNumber ) = @_;
+	my $date;
+	chomp($date = `transdate -d-0 -h`);
+	my $station = "PCGUI-DISP";
+	my $uacs    = "ADMIN";
+	print "Cat key: $catKey     Call sequence: $callSeq      Copy number: $copyNumber\n";
+	# if (!open(INFILE,$TempFiles{'items'}))
+	# {
+	# PrintMessage("\nCannot open $TempFiles{'items'}\n","$TempFiles{'z'}");
+	# }
+	# elsif (!open(OUTFILE,">>$TempFiles{'trans'}"))
+	# {
+	# close INFILE;
+	# PrintMessage("\nCannot open output file($TempFiles{'trans'})\n","$TempFiles{'z'}");
+	# }
+	# else
+	# {
+	# while (<INFILE>)
+	  # {
+	  # chomp;
+	  # $data = $_;
+	  # $itemid = (split(/\|/))[0];
+	  # $library = (split(/\|/))[1]; 
+	  # printf OUTFILE ("D%s%s ^S01EVFF%s^FE%s^NQ%s^OM^^O\n",$date,$station,$uacs,$library,$itemid);
+	  # }
+	# #close file handles
+	# close INFILE;
+	# close OUTFILE;
+	# }
+}
+
 
 # Kicks off the setting of various switches.
 # param:
 # return:
 sub init()
 {
-    my $opt_string = 'rm:n:xeb:cq';
+    my $opt_string = 'rm:n:xeb:cqt:';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{'x'});                            # User needs help
     $targetDicardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
@@ -162,6 +289,12 @@ sub init()
         print "created new discard file in current directory.\n";
         exit(0);
     }
+	elsif ( $opt{'t'} )
+	{
+		my $result = convertDiscards( $opt{'t'} );
+		print "$result items discarded from card: $opt{'t'}\n" if ( $result );
+		exit( 1 );
+	}
     else
     {
         # This is required to write files to the EPLAPP FS:
@@ -239,7 +372,7 @@ foreach (@sortedCards)
 			# if convert not selected we will get the same recommendations tomorrow.
 			if ($opt{'c'})
 			{
-				my $converted = convertDiscards($userKey);
+				my $converted = convertDiscards( $userKey );
 				if ($converted) # if conversion successful.
 				{
 					$dateConverted  = $today;
@@ -343,88 +476,4 @@ sub reportStatus
     $msg .= "\n";
     return $msg;
 }
-
-
-# These functions perform the conversion if -c is used on the command line.
-# param:  User Key for discard card, like 659264.
-# return: integer number of cards converted.
-#         or an empty string on failure.
-sub convertDiscards($)
-{
-	my $cardKey         = shift;
-	my $status          = 0;
-	# my $date3MonthsBack = `transdate -m-3`;
-	my $date3MonthsBack = `transdate -d-0`;
-	chomp($date3MonthsBack);
-	print "CONVERTING: $cardKey\n";
-	
-	# Get the list of items on this card.
-	#                                    selcharge -iU -c"<20120601" -oIy | selitem -iI -oIB
-	my $apiCmd = qq{sirsiecho $cardKey | selcharge -iU -c"<$date3MonthsBack" -oIy | selitem -iI -oIB};
-    my $results = `$apiCmd`;
-	print "$results\n";
-	my @catKeyList = split("\n", $results);
-	
-	foreach my $catKey (@catKeyList)
-	{
-		print "$catKey\n";
-		# updateToDiscard($catKey);
-		return
-    }
-    # #requested update of database records
-	# #sets up a log of the errors from the process we want this.
-    # doCommand("apiserver",
-              # "-h -e$errlogdir", 
-              # $TempFiles{'trans'},
-              # $TempFiles{'trans_response'},
-              # $TempFiles{'k'},
-              # \$Directives{'status'});
-
-      # #Capture item keys at selitem since edititem does not output keys
-	  ## changes the current location to DISCARD.
-      # doCommand("edititem",
-                # "-8\"ADMIN|PCGUI-DISP\" -m\"DISCARD\"", 
-                # $TempFiles{'keys'},
-                # $TempFiles{'m'},
-                # $TempFiles{'n'},
-                # \$Directives{'status'});
-	#use touchkeys for textedit and browse edit.
-	print "would have returned ".@catKeyList." items converted.\n";
-	return 0; # returns the size of the list.
-}
-
-sub updateToDiscard()
-{
-  my $date;
-  chomp($date = `transdate -d-0 -h`);
-  my $station = "PCGUI-DISP";
-  my $uacs    = "ADMIN";
-
-  # if (!open(INFILE,$TempFiles{'items'}))
-    # {
-    # PrintMessage("\nCannot open $TempFiles{'items'}\n","$TempFiles{'z'}");
-  	# }
-  # elsif (!open(OUTFILE,">>$TempFiles{'trans'}"))
-    # {
-  	# close INFILE;
-    # PrintMessage("\nCannot open output file($TempFiles{'trans'})\n","$TempFiles{'z'}");
-    # }
-  # else
-    # {
-  	# while (<INFILE>)
-  	  # {
-  	  # chomp;
-      # $data = $_;
-      # $itemid = (split(/\|/))[0];
-      # $library = (split(/\|/))[1]; 
-      # printf OUTFILE ("D%s%s ^S01EVFF%s^FE%s^NQ%s^OM^^O\n",$date,$station,$uacs,$library,$itemid);
-      # }
-    # #close file handles
-  	# close INFILE;
-  	# close OUTFILE;
-    # }
-}
-
-
-
 

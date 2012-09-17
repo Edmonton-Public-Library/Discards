@@ -4,7 +4,7 @@ USER=sirsi
 REMOTE=~/Unicorn/EPLwork/anisbet/
 LOCAL=~/projects/discards/
 
-put:
+put: test
 	scp ${LOCAL}discard.pl ${USER}@${SERVER}:${REMOTE}discard.pl 
 	scp ${LOCAL}discard_reports.pl ${USER}@${SERVER}:${REMOTE}discard_reports.pl 
 get:
