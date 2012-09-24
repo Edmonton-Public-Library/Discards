@@ -145,7 +145,7 @@ sub convertDiscards($)
 	my $date3MonthsBack = `transdate -d-0`; # just for testing.
 	chomp($date3MonthsBack);
 	print "CONVERTING: $cardKey\n";
-	selectItemsToDelete( $cardKey, $date3MonthsBack );
+	my $discardHashRef = selectItemsToDelete( $cardKey, $date3MonthsBack );
     # #requested update of database records
 	# #sets up a log of the errors from the process we want this.
     # doCommand("apiserver",
@@ -167,58 +167,155 @@ sub convertDiscards($)
 	return $status; # returns the size of the list.
 }
 
-#
-#
-#
+# Produces a hash of item keys for DISCARD conversion marking each item with the code 
+# for exclusion. If the code is zero the item is cleared for conversion and removal.
+# param:  cardKey string - key of the discard card.
+# param:  cutoffDate string - date 
+# return: hash reference of item keys -> exclude code where:
+# 0 = good to go
+# 1 = item has holds
+# 2 = item has bills
+# 4 = item has orders pending
+# 8 = item is under serial control
+# 16= item is accountable
 sub selectItemsToDelete
 {
 	my ( $cardKey, $cutoffDate ) = @_;
 	print "checking holds\n";
-    my $holdHashRef = getHolds( $cardKey );
-	# Get the list of items on this card from 90 days ago (as per EPL policy).
-	#                                           selcharge -iU -c"<20120601"         -oIy | selitem -iI -oIB
-    my $itemListResults = `sirsiecho $cardKey | selcharge -iU -c"<$cutoffDate" -oIy | selitem -iI -oIB 2>/dev/null`;
-	my @itemKeyBarcodeList = split("\n", $itemListResults);
-	my $discardItemKeysFile = qq{discard_item_keys.lst};
-	my $discardItemHoldKeysFile = qq{discard_items_on_hold.lst};
-	open( ITEM_KEYS, ">$discardItemKeysFile" ) or die "Error writing to '$discardItemKeysFile': $!\n";
-	open( ITEM_HOLDS, ">$discardItemHoldKeysFile" ) or die "Error writing to '$discardItemHoldKeysFile': $!\n";
-	foreach my $line (@itemKeyBarcodeList)
+	my $discardHashRef = getDiscardedItems( $cardKey, $cutoffDate );
+    removeItemsWithHolds( $cardKey, $discardHashRef );
+	removeItemsWithBills( $cardKey, $discardHashRef );
+	removeItemsWithOrders( $cardKey, $discardHashRef );
+	removeItemsThatAreAccountable( $cardKey, $discardHashRef );
+	removeItemsUnderSerialControl( $cardKey, $discardHashRef );
+	while ( my ($key, $value) = each( %$discardHashRef ) )
 	{
-		my ( $catKey, $callSeq, $copyNumber, $barCode ) = split( '\|', $line );
-		if ( $holdHashRef->{ "$catKey|$callSeq|$copyNumber|" } )
-		{
-			print "Hold: $catKey Call sequence: $callSeq Copy number: $copyNumber\n";
-			print ITEM_HOLDS "$catKey|$callSeq|$copyNumber|\n";
-		}
-		else
-		{
-			print           "$catKey|$callSeq|$copyNumber|\n";
-			print ITEM_KEYS "$catKey|$callSeq|$copyNumber|\n";
-		}
-    }
-	close( ITEM_KEYS );
-	close( ITEM_HOLDS );
-	# TODO get the list of bills do a 'not' on the list of keys with diff.pl!!
+		print "$key => $value\n";
+	}
+	return $discardHashRef;
 }
 
-# Returns a table of all ACTIVE holds for this user key.
-# param:  user key string - the user key of the discard card.
-# return: hash reference of all the items on the user's card that have active holds. 
-#         May be empty but not undefined.
-sub getHolds($)
+# Removes items that have holds against them.
+# param:  cardKey string - key of the discard card.
+# param:  hash reference of items on the discard card.
+# return: 
+# side effect: modifies the value of hash keys by adding 1 if the item has a hold
+#              and 0 if there is no hold for an item.
+sub removeItemsWithHolds
 {
-	my $cardKey = shift;
-	my $holdResults =   `sirsiecho $cardKey | selhold -iU            -oI 2>/dev/null`; # for testing.
+	my ( $cardKey, $discardHashRef ) = @_;
+	my $holdResults =   `sirsiecho $cardKey | selhold -iU            -oI 2>/dev/null`; # for testing selects all holds even inactive.
 	# my $holdResults = `sirsiecho $cardKey | selhold -iU -j"ACTIVE" -oI 2>/dev/null`;
 	my @holdItemList = split("\n", $holdResults);
-	my $hashRef = {};
-	foreach my $itemKey ( @holdItemList )
+	foreach my $holdItemKey ( @holdItemList )
 	{
-		chomp( $itemKey );
-		$hashRef->{ $itemKey } = 1;
+		chomp( $holdItemKey );
+		if ( not $discardHashRef->{ $holdItemKey } )
+		{
+			print "Hold error: '$holdItemKey' not found.\n";
+			next;
+		}
+		$discardHashRef->{ $holdItemKey } += 1;
 	}
-	return $hashRef;
+}
+
+# Removes items that have bills.
+# param:  cardKey string - key of the discard card.
+# param:  hash reference of items on the discard card.
+# return: 
+# side effect: modifies the value of hash keys by adding 2 if the item has a bill
+#              and 0 if there is no bill for an item.
+sub removeItemsWithBills
+{
+	my ( $cardKey, $discardHashRef ) = @_;
+	my $billResults = `sirsiecho $cardKey | selbill -b">0.00" -iI 2>/dev/null`;
+	my @billItemList = split( "\n", $billResults );
+	foreach my $billedItemKey ( @billItemList )
+	{
+		chomp( $billedItemKey );
+		if ( not $discardHashRef->{ $billedItemKey } )
+		{
+			print "Bill error: '$billedItemKey' not found.\n";
+			next;
+		}
+		$discardHashRef->{ $billedItemKey } += 2;
+	}
+}
+
+# Removes items that are on order. These may be real items or just place holders.
+# param:  cardKey string - key of the discard card.
+# param:  hash reference of items on the discard card.
+# return: 
+# side effect: modifies the value of hash keys by adding 4 if the item is on order
+#              and 0 otherwise.
+sub removeItemsWithOrders
+{
+	my ( $cardKey, $discardHashRef ) = @_;
+	my $orderedItems = `sirsiecho $cardKey | selcatalog -2">0" -iK -oKS 2>/dev/null`;
+	my @orderedItemList = split( "\n", $orderedItems );
+	foreach my $orderedItemKey ( @orderedItemList )
+	{
+		chomp( $orderedItemKey );
+		if ( not $discardHashRef->{ $orderedItemKey } )
+		{
+			print "Order error: '$orderedItemKey' not found.\n";
+			next;
+		}
+		$discardHashRef->{ $orderedItemKey } += 4;
+	}
+}
+
+# Removes items that are accountable. This check has no effect at EPL.
+# param:  cardKey string - key of the discard card.
+# param:  hash reference of items on the discard card.
+# return: 
+# side effect: always adds 0 to an item that is accountable, but if we did this
+#              the hash value would be increased by 16.
+sub removeItemsThatAreAccountable
+{
+	my ( $cardKey, $discardHashRef ) = @_;
+}
+
+# Removes items that are under serial control.
+# param:  cardKey string - key of the discard card.
+# param:  hash reference of items on the discard card.
+# return: 
+# side effect: modifies the value of hash keys by adding 8 if the item is on order
+#              and 0 otherwise.
+sub removeItemsUnderSerialControl
+{
+	my ( $cardKey, $discardHashRef ) = @_;
+	my $serialControlledItems = `sirsiecho $cardKey | selserctl -iK -oKS 2>/dev/null`;
+	my @serialControlledItemList = split( "\n", $serialControlledItems );
+	foreach my $serialControlledItemKey ( @serialControlledItemList )
+	{
+		chomp( $serialControlledItemKey );
+		if ( not $discardHashRef->{ $serialControlledItemKey } )
+		{
+			print "Order error: '$serialControlledItemKey' not found.\n";
+			next;
+		}
+		$discardHashRef->{ $serialControlledItemKey } += 8;
+	}
+}
+
+# Gets all of the items checked out to the argument discard card.
+# param:  cardKey string - User key for the discard card.
+# return: hash reference keys: item key, values: 0.
+sub getDiscardedItems
+{
+	my ( $cardKey, $cutoffDate ) = @_;
+	# Get the list of items on this card from 90 days ago (as per EPL policy).
+	#                                           selcharge -iU -c"<20120601"       -oIy | selitem -iI -oIB
+    my $itemListResults    = `sirsiecho $cardKey | selcharge -iU -c"<$cutoffDate" -oIy | selitem -iI -oIB 2>/dev/null`;
+	my @itemKeyBarcodeList = split("\n", $itemListResults);
+	my $itemKeyHashRef     = {};
+	foreach my $line ( @itemKeyBarcodeList )
+	{
+		my ( $catKey, $callSeq, $copyNumber, $barCode ) = split( '\|', $line );
+		$itemKeyHashRef->{ "$catKey|$callSeq|$copyNumber|" } = 0;
+    }
+	return $itemKeyHashRef;
 }
 
 sub recordDiscardTransaction
