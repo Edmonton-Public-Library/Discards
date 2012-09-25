@@ -79,6 +79,11 @@ use Fcntl;          # Needed for sysopen flags O_WRONLY etc.
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 
 my $VERSION               = 1.5;
+my $DISC                  = 0b00001;
+my $HOLD                  = 0b00010;
+my $BILL                  = 0b00100;
+my $ORDR                  = 0b01000;
+my $SCTL                  = 0b10000;
 my $targetDicardItemCount = 2000;
 # This value is used needed because not all converted items get discarded.
 my $fudgeFactor           = 0.1;  # percentage of items permitted over target limit.
@@ -98,6 +103,7 @@ my @finishedCards;                # List of cards to be written back to file.
 my @recommendedCards;             # Todays recommended cards to convert.
 my @convertCards;                 # Cards to be converted.
 my $discardsFile = "finished_discards.txt"; # Name of the discards file.
+my $tmpFileName  = qq{tmp_a};
 
 #
 # Message about this program and how to use it
@@ -113,7 +119,7 @@ usage: $0 [-xbrecq] [-n number_items] [-m email] [-t cardKey]
 
  -b BRAnch : request a specific branch for discards. Selecting a branch must
              be done by the 3-character prefix of the id of the card (WOO-DISCARDCA7
-             would be 'WOO') and is case sensitive. Also all the cards from that
+             would be 'WOO') and is uc/lc sensitive. Also all the cards from that
              branch will be checked and converted if -c was selected. 
  -c        : convert the recommended cards automatically.
  -e        : write the current finished discard list to MS excel format.
@@ -172,7 +178,7 @@ sub convertDiscards($)
 # param:  cardKey string - key of the discard card.
 # param:  cutoffDate string - date 
 # return: hash reference of item keys -> exclude code where:
-# 0 = good to go
+# 0 = good to DISCARD
 # 1 = item has holds
 # 2 = item has bills
 # 4 = item has orders pending
@@ -182,127 +188,76 @@ sub selectItemsToDelete
 {
 	my ( $cardKey, $cutoffDate ) = @_;
 	print "checking holds\n";
-	my $discardHashRef = getDiscardedItems( $cardKey, $cutoffDate );
-    removeItemsWithHolds( $cardKey, $discardHashRef );
-	removeItemsWithBills( $cardKey, $discardHashRef );
-	removeItemsWithOrders( $cardKey, $discardHashRef );
-	removeItemsThatAreAccountable( $cardKey, $discardHashRef );
-	removeItemsUnderSerialControl( $cardKey, $discardHashRef );
-	while ( my ($key, $value) = each( %$discardHashRef ) )
+	my $discardHashRef = getDiscardedItemsFromCard( $cardKey, $cutoffDate );
+	open( TMP, ">$tmpFileName" ) or die "Error writing to tmp file: $!\n";
+	for my $key ( keys %$discardHashRef )
 	{
-		print "$key => $value\n";
+        print TMP "$key\n";
+    }
+	close( TMP );
+    markItems( "WITH_HOLDS", $discardHashRef );
+	markItems( "WITH_BILLS", $discardHashRef );
+	markItems( "WITH_ORDERS", $discardHashRef );
+	markItems( "ARE_ACCOUNTABLE", $discardHashRef );
+	markItems( "UNDER_SERIAL_CONTROL", $discardHashRef );
+	my ( $key, $value );
+	format FORM = 
+@<<<<<<<<<<<<< @##
+$key,   $value
+.
+	$~ = "FORM";
+	my $discardCount = 0;
+	while ( ($key, $value) = each( %$discardHashRef ) )
+	{
+		write;
+		$discardCount++ if ( $value == 1 );
 	}
+	$~ = "STDOUT";
+	print "total items to discard: $discardCount\n";
 	return $discardHashRef;
 }
 
-# Removes items that have holds against them.
-# param:  cardKey string - key of the discard card.
-# param:  hash reference of items on the discard card.
-# return: 
-# side effect: modifies the value of hash keys by adding 1 if the item has a hold
-#              and 0 if there is no hold for an item.
-sub removeItemsWithHolds
-{
-	my ( $cardKey, $discardHashRef ) = @_;
-	my $holdResults =   `sirsiecho $cardKey | selhold -iU            -oI 2>/dev/null`; # for testing selects all holds even inactive.
-	# my $holdResults = `sirsiecho $cardKey | selhold -iU -j"ACTIVE" -oI 2>/dev/null`;
-	my @holdItemList = split("\n", $holdResults);
-	foreach my $holdItemKey ( @holdItemList )
-	{
-		chomp( $holdItemKey );
-		if ( not $discardHashRef->{ $holdItemKey } )
-		{
-			print "Hold error: '$holdItemKey' not found.\n";
-			next;
-		}
-		$discardHashRef->{ $holdItemKey } += 1;
-	}
-}
 
-# Removes items that have bills.
-# param:  cardKey string - key of the discard card.
+# Marks items that are not to be discarded. Any value that is greater than 0 will be preserved.
+# Values are bit ordered so the reason of the disqualification can be tested.
+# 1 = good to DISCARD
+# 2 = item has holds
+# 4 = item has bills
+# 8 = item has orders pending
+# 16 = item is under serial control
+# 32= item is accountable
+# param:  keyWord string - The name of the disqualification check.
 # param:  hash reference of items on the discard card.
 # return: 
-# side effect: modifies the value of hash keys by adding 2 if the item has a bill
-#              and 0 if there is no bill for an item.
-sub removeItemsWithBills
+# side effect: modifies the value of hash keys by summing applicable disqualification codes.
+#              and 0 if there is no pediment to the item being discarded.
+sub markItems
 {
-	my ( $cardKey, $discardHashRef ) = @_;
-	my $billResults = `sirsiecho $cardKey | selbill -b">0.00" -iI 2>/dev/null`;
-	my @billItemList = split( "\n", $billResults );
-	foreach my $billedItemKey ( @billItemList )
+	my ( $keyWord, $discardHashRef ) = @_;
+	my $results  = "";
+	if    ( $keyWord eq "WITH_HOLDS" )          { print "checking holds ";   $results = `cat $tmpFileName | selhold     -iC -j"ACTIVE" -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_BILLS" )          { print "checking bills ";   $results = `cat $tmpFileName | selbill     -iI -b">0.00"  -oI  2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_ORDERS" )         { print "checking orders ";  $results = `cat $tmpFileName | selorderlin -iC            -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ print "checking serials "; $results = `cat $tmpFileName | selserctl   -iC            -oCS 2>/dev/null`; }
+	else  { ; }
+	my @itemList  = split( "\n", $results );
+	print "completed, ".scalar( @itemList )." items found\n";
+	foreach my $itemKey ( @itemList )
 	{
-		chomp( $billedItemKey );
-		if ( not $discardHashRef->{ $billedItemKey } )
-		{
-			print "Bill error: '$billedItemKey' not found.\n";
-			next;
-		}
-		$discardHashRef->{ $billedItemKey } += 2;
-	}
-}
-
-# Removes items that are on order. These may be real items or just place holders.
-# param:  cardKey string - key of the discard card.
-# param:  hash reference of items on the discard card.
-# return: 
-# side effect: modifies the value of hash keys by adding 4 if the item is on order
-#              and 0 otherwise.
-sub removeItemsWithOrders
-{
-	my ( $cardKey, $discardHashRef ) = @_;
-	my $orderedItems = `sirsiecho $cardKey | selcatalog -2">0" -iK -oKS 2>/dev/null`;
-	my @orderedItemList = split( "\n", $orderedItems );
-	foreach my $orderedItemKey ( @orderedItemList )
-	{
-		chomp( $orderedItemKey );
-		if ( not $discardHashRef->{ $orderedItemKey } )
-		{
-			print "Order error: '$orderedItemKey' not found.\n";
-			next;
-		}
-		$discardHashRef->{ $orderedItemKey } += 4;
-	}
-}
-
-# Removes items that are accountable. This check has no effect at EPL.
-# param:  cardKey string - key of the discard card.
-# param:  hash reference of items on the discard card.
-# return: 
-# side effect: always adds 0 to an item that is accountable, but if we did this
-#              the hash value would be increased by 16.
-sub removeItemsThatAreAccountable
-{
-	my ( $cardKey, $discardHashRef ) = @_;
-}
-
-# Removes items that are under serial control.
-# param:  cardKey string - key of the discard card.
-# param:  hash reference of items on the discard card.
-# return: 
-# side effect: modifies the value of hash keys by adding 8 if the item is on order
-#              and 0 otherwise.
-sub removeItemsUnderSerialControl
-{
-	my ( $cardKey, $discardHashRef ) = @_;
-	my $serialControlledItems = `sirsiecho $cardKey | selserctl -iK -oKS 2>/dev/null`;
-	my @serialControlledItemList = split( "\n", $serialControlledItems );
-	foreach my $serialControlledItemKey ( @serialControlledItemList )
-	{
-		chomp( $serialControlledItemKey );
-		if ( not $discardHashRef->{ $serialControlledItemKey } )
-		{
-			print "Order error: '$serialControlledItemKey' not found.\n";
-			next;
-		}
-		$discardHashRef->{ $serialControlledItemKey } += 8;
+		chomp( $itemKey );
+		next if ( not $discardHashRef->{ $itemKey } ); # this ignores output that produces more than one matchs then Item Keys.
+		if    ( $keyWord eq "WITH_HOLDS" )          { $discardHashRef->{ $itemKey } |= $HOLD; }
+		elsif ( $keyWord eq "WITH_BILLS" )          { $discardHashRef->{ $itemKey } |= $BILL; }
+		elsif ( $keyWord eq "WITH_ORDERS" )         { $discardHashRef->{ $itemKey } |= $ORDR; }
+		elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $discardHashRef->{ $itemKey } |= $SCTL; }
+		else  { ; }
 	}
 }
 
 # Gets all of the items checked out to the argument discard card.
 # param:  cardKey string - User key for the discard card.
 # return: hash reference keys: item key, values: 0.
-sub getDiscardedItems
+sub getDiscardedItemsFromCard
 {
 	my ( $cardKey, $cutoffDate ) = @_;
 	# Get the list of items on this card from 90 days ago (as per EPL policy).
@@ -313,7 +268,7 @@ sub getDiscardedItems
 	foreach my $line ( @itemKeyBarcodeList )
 	{
 		my ( $catKey, $callSeq, $copyNumber, $barCode ) = split( '\|', $line );
-		$itemKeyHashRef->{ "$catKey|$callSeq|$copyNumber|" } = 0;
+		$itemKeyHashRef->{ "$catKey|$callSeq|$copyNumber|" } = $DISC;
     }
 	return $itemKeyHashRef;
 }
