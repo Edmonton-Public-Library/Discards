@@ -156,7 +156,9 @@ sub convertDiscards($)
 	chomp($date3MonthsBack);
 	print "CONVERTING: $cardKey\n";
 	my $discardHashRef = selectItemsToDelete( $cardKey, $date3MonthsBack );
-	my @EPLPreservePolicies = ( $LCPY, ( $HTIT | $LCPY ) ); #, $BILL, $ORDR, $SCTL, ($HTIT | $LCPY), $HCPY ];
+	# policy order is important since remove last copy, then remove last copy + holds
+	# is not the same as remove last copy + holdsf then remove last copy.
+	my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
 	applyPolicies( $discardHashRef, @EPLPreservePolicies );
     # #requested update of database records
 	# #sets up a log of the errors from the process we want this.
@@ -242,10 +244,16 @@ $key,   $value
 		else  { print "unknown '$policy'\n"; }
 		while ( my ($key, $value) = each( %$discardHashRef ) )
 		{
-			print OUT "$key\n" if ( ( $policy & $value ) == $policy );
+			if ( ( $policy & $value ) == $policy )
+			{
+				print OUT "$key\n";
+				# remove the item from the list of discards since the policy matches a 'keep' policy.
+				delete( $discardHashRef->{ $key } );
+			}
 		}
 		close( OUT );
 	}
+	print "Total discards to process: ".scalar( keys( %$discardHashRef ) )." items.\n";
 }
 
 
