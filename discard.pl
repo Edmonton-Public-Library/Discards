@@ -159,7 +159,8 @@ sub convertDiscards($)
 	# policy order is important since remove last copy, then remove last copy + holds
 	# is not the same as remove last copy + holdsf then remove last copy.
 	my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
-	applyPolicies( $discardHashRef, @EPLPreservePolicies );
+	my $totalDiscards = applyPolicies( $discardHashRef, @EPLPreservePolicies );
+	print "Total discards to process: $totalDiscards items.\n";
     # #requested update of database records
 	# #sets up a log of the errors from the process we want this.
     # doCommand("apiserver",
@@ -253,7 +254,7 @@ $key,   $value
 		}
 		close( OUT );
 	}
-	print "Total discards to process: ".scalar( keys( %$discardHashRef ) )." items.\n";
+	return scalar( keys( %$discardHashRef ) );
 }
 
 
