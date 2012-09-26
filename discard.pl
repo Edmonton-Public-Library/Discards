@@ -79,11 +79,14 @@ use Fcntl;          # Needed for sysopen flags O_WRONLY etc.
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 
 my $VERSION               = 1.5;
-my $DISC                  = 0b00001;
-my $HOLD                  = 0b00010;
-my $BILL                  = 0b00100;
-my $ORDR                  = 0b01000;
-my $SCTL                  = 0b10000;
+my $DISC                  = 0b00000001;
+my $LCPY                  = 0b00000010;
+my $BILL                  = 0b00000100;
+my $ORDR                  = 0b00001000;
+my $SCTL                  = 0b00010000;
+my $ACCT                  = 0b00100000;
+my $HTIT                  = 0b01000000;
+my $HCPY                  = 0b10000000;
 my $targetDicardItemCount = 2000;
 # This value is used needed because not all converted items get discarded.
 my $fudgeFactor           = 0.1;  # percentage of items permitted over target limit.
@@ -122,6 +125,7 @@ usage: $0 [-xbrecq] [-n number_items] [-m email] [-t cardKey]
              would be 'WOO') and is uc/lc sensitive. Also all the cards from that
              branch will be checked and converted if -c was selected. 
  -c        : convert the recommended cards automatically.
+ -d        : turn on debugging output.
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
  -m "addrs": mail output to provided address
@@ -152,6 +156,8 @@ sub convertDiscards($)
 	chomp($date3MonthsBack);
 	print "CONVERTING: $cardKey\n";
 	my $discardHashRef = selectItemsToDelete( $cardKey, $date3MonthsBack );
+	my @EPLPreservePolicies = ( $LCPY, ( $HTIT | $LCPY ) ); #, $BILL, $ORDR, $SCTL, ($HTIT | $LCPY), $HCPY ];
+	applyPolicies( $discardHashRef, @EPLPreservePolicies );
     # #requested update of database records
 	# #sets up a log of the errors from the process we want this.
     # doCommand("apiserver",
@@ -178,12 +184,6 @@ sub convertDiscards($)
 # param:  cardKey string - key of the discard card.
 # param:  cutoffDate string - date 
 # return: hash reference of item keys -> exclude code where:
-# 0 = good to DISCARD
-# 1 = item has holds
-# 2 = item has bills
-# 4 = item has orders pending
-# 8 = item is under serial control
-# 16= item is accountable
 sub selectItemsToDelete
 {
 	my ( $cardKey, $cutoffDate ) = @_;
@@ -195,37 +195,70 @@ sub selectItemsToDelete
         print TMP "$key\n";
     }
 	close( TMP );
-    markItems( "WITH_HOLDS", $discardHashRef );
+    markItems( "LAST_COPY", $discardHashRef );
 	markItems( "WITH_BILLS", $discardHashRef );
 	markItems( "WITH_ORDERS", $discardHashRef );
 	markItems( "ARE_ACCOUNTABLE", $discardHashRef );
 	markItems( "UNDER_SERIAL_CONTROL", $discardHashRef );
-	my ( $key, $value );
-	format FORM = 
+	markItems( "WITH_TITLE_HOLDS", $discardHashRef );
+    markItems( "WITH_COPY_HOLDS", $discardHashRef );
+	return $discardHashRef;
+}
+
+# Applys library discard policies to the discarded items and reports the
+# items that fail to match discardable discard material tests.
+# param:  policies string - values to filter out non-discardable items.
+# param:  item key hash reference - values hold bit map test code results.
+#         See markItems() for more details.
+sub applyPolicies
+{
+	my ( $discardHashRef, @policies ) = @_;
+	if ( $opt{'d'} )
+	{
+		my ( $key, $value );
+		format FORM = 
 @<<<<<<<<<<<<< @##
 $key,   $value
 .
-	$~ = "FORM";
-	my $discardCount = 0;
-	while ( ($key, $value) = each( %$discardHashRef ) )
-	{
-		write;
-		$discardCount++ if ( $value == 1 );
+		$~ = "FORM";
+		my $discardCount = 0;
+		while ( ($key, $value) = each( %$discardHashRef ) )
+		{
+			write;
+			$discardCount++ if ( $value == 1 );
+		}
+		$~ = "STDOUT";
 	}
-	$~ = "STDOUT";
-	print "total items to discard: $discardCount\n";
-	return $discardHashRef;
+	
+	foreach my $policy ( @policies )
+	{
+		print "reporting policy: ";
+		if    ( $policy == $LCPY )            { open( OUT, ">last_copy_items.lst" ) or die "Error: $!\n"; print "last copy\n"; }
+		elsif ( $policy == $BILL )            { open( OUT, ">items_with_bills.lst" ) or die "Error: $!\n"; print "bills\n"; }
+		elsif ( $policy == $ORDR )            { open( OUT, ">items_on_order.lst" ) or die "Error: $!\n"; print "items on order\n"; }
+		elsif ( $policy == $SCTL )            { open( OUT, ">items_under_serial_control.lst" ) or die "Error: $!\n"; print "serials\n"; }
+		elsif ( $policy == ( $HTIT | $LCPY ) ){ open( OUT, ">last_copy_with_hold_items.lst" ) or die "Error: $!\n"; print "last copy with holds\n"; }
+		elsif ( $policy == $HCPY )            { open( OUT, ">items_with_copy_holds.lst" ) or die "Error: $!\n"; print "copy holds\n"; }
+		else  { print "unknown '$policy'\n"; }
+		while ( my ($key, $value) = each( %$discardHashRef ) )
+		{
+			print OUT "$key\n" if ( ( $policy & $value ) == $policy );
+		}
+		close( OUT );
+	}
 }
 
 
 # Marks items that are not to be discarded. Any value that is greater than 0 will be preserved.
 # Values are bit ordered so the reason of the disqualification can be tested.
-# 1 = good to DISCARD
-# 2 = item has holds
-# 4 = item has bills
-# 8 = item has orders pending
+# 1  = good to DISCARD
+# 2  = last copy
+# 4  = item has bills
+# 8  = item has orders pending
 # 16 = item is under serial control
-# 32= item is accountable
+# 32 = item is accountable
+# 64 = item has title level hold
+# 128= item has copy level hold
 # param:  keyWord string - The name of the disqualification check.
 # param:  hash reference of items on the discard card.
 # return: 
@@ -235,21 +268,27 @@ sub markItems
 {
 	my ( $keyWord, $discardHashRef ) = @_;
 	my $results  = "";
-	if    ( $keyWord eq "WITH_HOLDS" )          { print "checking holds ";   $results = `cat $tmpFileName | selhold     -iC -j"ACTIVE" -oCS 2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_BILLS" )          { print "checking bills ";   $results = `cat $tmpFileName | selbill     -iI -b">0.00"  -oI  2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_ORDERS" )         { print "checking orders ";  $results = `cat $tmpFileName | selorderlin -iC            -oCS 2>/dev/null`; }
-	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ print "checking serials "; $results = `cat $tmpFileName | selserctl   -iC            -oCS 2>/dev/null`; }
-	else  { ; }
+	if    ( $keyWord eq "LAST_COPY" )           { print "checking last copy "; $results = `cat $tmpFileName | selcallnum    -iN -c"<2"     -oNS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_BILLS" )          { print "checking bills ";     $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_ORDERS" )         { print "checking orders ";    $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ print "checking serials ";   $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { print "checking holds ";     $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { print "checking holds ";     $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
+	else  { print "not checking: '$keyWord'\n" if ( $opt{'d'} ); return; }
 	my @itemList  = split( "\n", $results );
-	print "completed, ".scalar( @itemList )." items found\n";
+	print "completed, ".scalar( @itemList )." related hits\n";
 	foreach my $itemKey ( @itemList )
 	{
 		chomp( $itemKey );
-		next if ( not $discardHashRef->{ $itemKey } ); # this ignores output that produces more than one matchs then Item Keys.
-		if    ( $keyWord eq "WITH_HOLDS" )          { $discardHashRef->{ $itemKey } |= $HOLD; }
+		# some commands only take a cat key and produce many results with cat keys that don't match. Only update the
+		# values of cat keys that match.
+		next if ( not $discardHashRef->{ $itemKey } );
+		if    ( $keyWord eq "LAST_COPY" )           { $discardHashRef->{ $itemKey } |= $LCPY; }
 		elsif ( $keyWord eq "WITH_BILLS" )          { $discardHashRef->{ $itemKey } |= $BILL; }
 		elsif ( $keyWord eq "WITH_ORDERS" )         { $discardHashRef->{ $itemKey } |= $ORDR; }
 		elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $discardHashRef->{ $itemKey } |= $SCTL; }
+		elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { $discardHashRef->{ $itemKey } |= $HTIT; }
+		elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { $discardHashRef->{ $itemKey } |= $HCPY; }
 		else  { ; }
 	}
 }
@@ -312,7 +351,7 @@ sub recordDiscardTransaction
 # return:
 sub init()
 {
-    my $opt_string = 'rm:n:xeb:cqt:';
+    my $opt_string = 'b:cdem:n:qrt:x';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{'x'});                            # User needs help
     $targetDicardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
