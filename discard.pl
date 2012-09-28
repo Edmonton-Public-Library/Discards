@@ -107,6 +107,7 @@ my @recommendedCards;             # Todays recommended cards to convert.
 my @convertCards;                 # Cards to be converted.
 my $discardsFile = "finished_discards.txt"; # Name of the discards file.
 my $tmpFileName  = qq{tmp_a};
+chomp( my $tmpDir= `getpathname tmp` );
 
 #
 # Message about this program and how to use it
@@ -144,6 +145,162 @@ EOF
     exit;
 }
 
+# Reads the contents of a file into a hash reference.
+# param:  file name string - path of file to write to.
+# return: hash reference - table data.
+sub readTable($)
+{
+	my ( $fileName ) = shift;
+	my $table = {};
+	open TABLE, "<$fileName" or die "Serialization error reading '$fileName' $!\n";
+	while (<TABLE>)
+	{
+		chomp;
+		$table->{$_} = 1;
+	}
+	close TABLE;
+	return $table;
+}
+
+# Writes the contents of a hash reference to file. Values are not stored.
+# param:  file name string - path of file to write to.
+# param:  table hash reference - data to write to file (keys only).
+# return: 
+sub writeTable($$)
+{
+	my $fileName = shift;
+	my $table    = shift;
+	open TABLE, ">$fileName" or die "Serialization error writing '$fileName' $!\n";
+	for my $key (keys %$table)
+	{
+		print TABLE "$key\n";
+	}
+	close TABLE;
+	return $table;
+}
+
+
+# Moves all items to location DISCARD.
+# param:  hash reference of discarded cat keys.
+# return: count of items moved.
+sub moveItemsToDISCARD( $ )
+{
+	my ( $discardHashRef ) = shift;
+	# first job: create a file of the cat keys we have left on the hash ref.
+	my $barCodeFile = "$tmpDir/T_DISCARD_BARC.lst";
+	my $requestFile = "DISCARD_transaction_request.cmd";
+	my $responseFile= "DISCARD_transaction_reponse.log";
+	writeTable( $barCodeFile, $discardHashRef );
+	# second job: get the barcodes.
+	my $barCodes = `cat $barCodeFile | selitem -iK -oBm 2>/dev/null`;
+	unlink( $barCodeFile ); # clean up the temp file.
+	my @barCodesLocations = split( '\n', $barCodes );
+	# third job: create the API command for discharge the item off the discard card.
+	# we first discharge the item then right after we change its location to DISCARD.
+	open( API_SERVER_TRANSACTION_FILE, ">$requestFile" ) or die "Couldn't write to '$requestFile' $!\n";
+	my $transactionSequenceNumber = 0;
+	chomp( my $dateTime = `date +%Y%m%d%H%M%S` );
+	foreach  ( @barCodesLocations )
+	{
+		my ( $barCode, $currentLocation ) = split( '\|', $_ );
+		# unique-per-second transcation numbering for logging and idempotent transaction atomicity within database.
+		$transactionSequenceNumber = 1 if ( $transactionSequenceNumber++ >= 99 );
+		# create server transaction for discharge
+		print API_SERVER_TRANSACTION_FILE getDischargeTransaction( $barCode, $transactionSequenceNumber, $dateTime );
+		$transactionSequenceNumber = 1 if ( $transactionSequenceNumber++ >= 99 );
+		# create server transaction for change location to Discard.
+		print API_SERVER_TRANSACTION_FILE getChangeLocationTransaction( $barCode, $transactionSequenceNumber, $currentLocation );
+	}
+	close( API_SERVER_TRANSACTION_FILE );
+	# fourth job: run the apiserver with the commands to convert the discards.
+	# `apiserver -h <$requestFile >$responseFile`;
+}
+
+# Creates a change location transaction command.
+# param:  barCode string - bar code for the item being moved.
+# param:  sequenceNumber string - sequence number between 1-99.
+# param:  currentLocation string - current location of the item.
+# return: transaction as a string.
+sub getChangeLocationTransaction( $$$ )
+{
+	my ( $barCode )        = shift;
+	my ( $sequenceNumber ) = shift;
+	my ( $currentlocation )= shift;
+	my $transactionRequestLine    = '^S';
+	$transactionRequestLine = '^S';
+	$transactionRequestLine .= $sequenceNumber = '0' x ( 2 - length( $sequenceNumber ) ) . $sequenceNumber;
+	$transactionRequestLine .= 'IV'; #Edit Item Part B command code
+	$transactionRequestLine .= 'FF'; #station login user access
+	$transactionRequestLine .= 'ADMIN';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'FE'; #station library
+	$transactionRequestLine .= 'EPLMNA';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'OM'; #master override
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'NQ'; #Item ID
+	$transactionRequestLine .= $barCode;
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'IL'; #Current Location
+	$transactionRequestLine .= $currentlocation;
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'O';
+	return "$transactionRequestLine\n";
+}
+
+# Creates a discharge transaction.
+# param:  barCode string - bar code for an item.
+# param:  sequenceNumber string - sequence number between 1-99.
+# param:  date string - date time stamp in log format.
+# return: string well formed apiserver transaction string.
+sub getDischargeTransaction( $$$ )
+{
+	my ( $barCode )        = shift;
+	my ( $sequenceNumber ) = shift;
+	my ( $dischargeDate )  = shift;
+	# looks like: 
+	# E201209281019291224R ^S72EVFWSORTLHL^FEEPLLHL^FFSORTATION^FcNONE^dC6^NQ31221094990483^CO9/28/2012,10:19^^O
+	# Here is one from the remove report:
+	# E201209280833001220R ^S53EVFFADMIN^FEEPLMLW^NQ31221095677535  ^OM^DB20120928083300^^O00064
+	# Chris's code:
+	#Example: Request Line (discharge) from a Log File:
+	#E200808010805220634R ^S86EVFFCIRC^FEEPLJPL^FcNONE^FWJPLCIRC^NQ31221082898953^CO08/01/2008^Fv20000000^^O
+	#Below is same line but using logprint and translate commands:
+	#8/1/2008,08:05:22 Station: 0634 Request: Sequence #: 86 Command: Discharge Item station login user access:CIRC
+	#station library:EPLJPL  station login clearance:NONE  station user's user ID:JPLCIRC  item ID:31221082898953
+	#date of discharge:08/01/2008  Max length of transaction response:20000000
+	#-----------------------------------------------------------
+	my $transactionRequestLine = '^S';
+	$transactionRequestLine .= $sequenceNumber = '0' x ( 2 - length( $sequenceNumber ) ) . $sequenceNumber;
+	$transactionRequestLine .= 'EV'; #Discharge Item command code
+	$transactionRequestLine .= 'FF'; #station login user access
+	$transactionRequestLine .= 'ADMIN';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'FE'; #station library
+	$transactionRequestLine .= 'EPLMNA';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'FcNONE';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'FW'; #station user's user ID
+	$transactionRequestLine .= 'ADMIN';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'NQ'; #Item ID
+	$transactionRequestLine .= $barCode;
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'OM'; #master override
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'DB'; #Date of Discharge
+	$transactionRequestLine .= $dischargeDate; # 20120928135216
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'Fv'; #Max length of transaction response
+	$transactionRequestLine .= '20000000';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= '^';
+	$transactionRequestLine .= 'O';
+	return "$transactionRequestLine\n";
+}
+
 # These functions perform the conversion if -c is used on the command line.
 # param:  User Key for discard card, like 659264.
 # return: integer number of cards converted or zero if none or on failure.
@@ -161,24 +318,9 @@ sub convertDiscards($)
 	my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
 	my $totalDiscards = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 	print "Total discards to process: $totalDiscards items.\n";
-    # #requested update of database records
-	# #sets up a log of the errors from the process we want this.
-    # doCommand("apiserver",
-              # "-h -e$errlogdir", 
-              # $TempFiles{'trans'},
-              # $TempFiles{'trans_response'},
-              # $TempFiles{'k'},
-              # \$Directives{'status'});
-
-      # #Capture item keys at selitem since edititem does not output keys
-	  ## changes the current location to DISCARD.
-      # doCommand("edititem",
-                # "-8\"ADMIN|PCGUI-DISP\" -m\"DISCARD\"", 
-                # $TempFiles{'keys'},
-                # $TempFiles{'m'},
-                # $TempFiles{'n'},
-                # \$Directives{'status'});
-	#use touchkeys for textedit and browse edit.
+	# move all discarded items to location DISCARD.
+	my $moveCount = moveItemsToDISCARD( $discardHashRef );
+    
 	return $status; # returns the size of the list.
 }
 
@@ -198,6 +340,7 @@ sub selectItemsToDelete
         print TMP "$key\n";
     }
 	close( TMP );
+	# now set the bits for each of the DISCARD business rules.
     markItems( "LAST_COPY", $discardHashRef );
 	markItems( "WITH_BILLS", $discardHashRef );
 	markItems( "WITH_ORDERS", $discardHashRef );
@@ -247,7 +390,11 @@ $key,   $value
 			{
 				print OUT "$key\n";
 				# remove the item from the list of discards since the policy matches a 'keep' policy.
-				delete( $discardHashRef->{ $key } );
+				# -------------------------
+				# revisit this. Chris thinks we can move all items to DISCARD since the remove report will 
+				# also filter before it does its remove. The up-shot is that all the items will be moved off
+				# the discard card and locatable by DISCARD location.
+				# delete( $discardHashRef->{ $key } );
 			}
 		}
 		close( OUT );
@@ -275,13 +422,14 @@ sub markItems
 {
 	my ( $keyWord, $discardHashRef ) = @_;
 	my $results  = "";
+	# while this code looks amature-ish it is clearer and has no negative spacial or temporal impact on the script.
 	if    ( $keyWord eq "LAST_COPY" )           { print "checking last copy "; $results = `cat $tmpFileName | selcallnum    -iN -c"<2"     -oNS 2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_BILLS" )          { print "checking bills ";     $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_ORDERS" )         { print "checking orders ";    $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ print "checking serials ";   $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { print "checking holds ";     $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { print "checking holds ";     $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
-	else  { print "not checking: '$keyWord'\n" if ( $opt{'d'} ); return; }
+	else  { print "skipping: '$keyWord'\n" if ( $opt{'d'} ); return; }
 	my @itemList  = split( "\n", $results );
 	print "completed, ".scalar( @itemList )." related hits\n";
 	foreach my $itemKey ( @itemList )
@@ -318,40 +466,6 @@ sub getDiscardedItemsFromCard
     }
 	return $itemKeyHashRef;
 }
-
-sub recordDiscardTransaction
-{
-	my ( $catKey, $callSeq, $copyNumber ) = @_;
-	my $date;
-	chomp($date = `transdate -d-0 -h`);
-	my $station = "PCGUI-DISP";
-	my $uacs    = "ADMIN";
-	print "Cat key: $catKey     Call sequence: $callSeq      Copy number: $copyNumber\n";
-	# if (!open(INFILE,$TempFiles{'items'}))
-	# {
-	# PrintMessage("\nCannot open $TempFiles{'items'}\n","$TempFiles{'z'}");
-	# }
-	# elsif (!open(OUTFILE,">>$TempFiles{'trans'}"))
-	# {
-	# close INFILE;
-	# PrintMessage("\nCannot open output file($TempFiles{'trans'})\n","$TempFiles{'z'}");
-	# }
-	# else
-	# {
-	# while (<INFILE>)
-	  # {
-	  # chomp;
-	  # $data = $_;
-	  # $itemid = (split(/\|/))[0];
-	  # $library = (split(/\|/))[1]; 
-	  # printf OUTFILE ("D%s%s ^S01EVFF%s^FE%s^NQ%s^OM^^O\n",$date,$station,$uacs,$library,$itemid);
-	  # }
-	# #close file handles
-	# close INFILE;
-	# close OUTFILE;
-	# }
-}
-
 
 # Kicks off the setting of various switches.
 # param:
