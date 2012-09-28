@@ -159,7 +159,7 @@ sub convertDiscards($)
 	# policy order is important since remove last copy, then remove last copy + holds
 	# is not the same as remove last copy + holdsf then remove last copy.
 	my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
-	my $totalDiscards = applyPolicies( $discardHashRef, @EPLPreservePolicies );
+	my $totalDiscards = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 	print "Total discards to process: $totalDiscards items.\n";
     # #requested update of database records
 	# #sets up a log of the errors from the process we want this.
@@ -213,7 +213,7 @@ sub selectItemsToDelete
 # param:  policies string - values to filter out non-discardable items.
 # param:  item key hash reference - values hold bit map test code results.
 #         See markItems() for more details.
-sub applyPolicies
+sub reportAppliedPolicies
 {
 	my ( $discardHashRef, @policies ) = @_;
 	if ( $opt{'d'} )
@@ -224,11 +224,9 @@ sub applyPolicies
 $key,   $value
 .
 		$~ = "FORM";
-		my $discardCount = 0;
 		while ( ($key, $value) = each( %$discardHashRef ) )
 		{
 			write;
-			$discardCount++ if ( $value == 1 );
 		}
 		$~ = "STDOUT";
 	}
