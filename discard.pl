@@ -236,12 +236,12 @@ $key,   $value
 	foreach my $policy ( @policies )
 	{
 		print "reporting policy: ";
-		if    ( $policy == $LCPY )            { open( OUT, ">last_copy_items.lst" ) or die "Error: $!\n"; print "last copy\n"; }
-		elsif ( $policy == $BILL )            { open( OUT, ">items_with_bills.lst" ) or die "Error: $!\n"; print "bills\n"; }
-		elsif ( $policy == $ORDR )            { open( OUT, ">items_on_order.lst" ) or die "Error: $!\n"; print "items on order\n"; }
-		elsif ( $policy == $SCTL )            { open( OUT, ">items_under_serial_control.lst" ) or die "Error: $!\n"; print "serials\n"; }
-		elsif ( $policy == ( $HTIT | $LCPY ) ){ open( OUT, ">last_copy_with_hold_items.lst" ) or die "Error: $!\n"; print "last copy with holds\n"; }
-		elsif ( $policy == $HCPY )            { open( OUT, ">items_with_copy_holds.lst" ) or die "Error: $!\n"; print "copy holds\n"; }
+		if    ( $policy == $LCPY )            { open( OUT, ">DISCARD_LCPY.lst" ) or die "Error: $!\n"; print "last copy\n"; }
+		elsif ( $policy == $BILL )            { open( OUT, ">DISCARD_BILL.lst" ) or die "Error: $!\n"; print "bills\n"; }
+		elsif ( $policy == $ORDR )            { open( OUT, ">DISCARD_ORDR.lst" ) or die "Error: $!\n"; print "items on order\n"; }
+		elsif ( $policy == $SCTL )            { open( OUT, ">DISCARD_SCTL.lst" ) or die "Error: $!\n"; print "serials\n"; }
+		elsif ( $policy == ( $HTIT | $LCPY ) ){ open( OUT, ">DISCARD_LCHT.lst" ) or die "Error: $!\n"; print "last copy with holds\n"; }
+		elsif ( $policy == $HCPY )            { open( OUT, ">DISCARD_HCPY.lst" ) or die "Error: $!\n"; print "copy holds\n"; }
 		else  { print "unknown '$policy'\n"; }
 		while ( my ($key, $value) = each( %$discardHashRef ) )
 		{
