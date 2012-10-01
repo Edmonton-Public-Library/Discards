@@ -94,6 +94,8 @@ my $SCTL                  = 0b00010000;
 my $ACCT                  = 0b00100000;
 my $HTIT                  = 0b01000000;
 my $HCPY                  = 0b10000000;
+# api calls
+my $apiReportDISCARDStatus = qq{seluser -p"DISCARD" -oUBDfachb | seluserstatus -iU -oUSj | selascii -iR -oF2F1F3F4F5F6F7F8F9};
 # policy order is important since remove last copy, then remove last copy + holds
 # is not the same as remove last copy + holdsf then remove last copy.
 my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
@@ -102,7 +104,6 @@ chomp( my $discardRetentionPeriod = `transdate -d-90` );
 my $targetDicardItemCount = 2000;
 # This value is used needed because not all converted items get discarded.
 my $fudgeFactor           = 0.1;  # percentage of items permitted over target limit.
-my $mail                  = "";   # mail content.
 my %holdsCards;                   # list of cards that have holds on them
 my %overLoadedCards;              # cards that exceed the convert limit set with -n
 my %barCards;                     # List of cards that exceed 1000 items currently.
@@ -110,8 +111,7 @@ my %okCards;                      # List of cards whose status is OK (not BARRED
 my %barredCards;                  # List of cards whose status is BARRED.
 my %billCards;                    # List of cards that have unpaid bills on them.
 my %misNamedCards;                # Cards that are given DISCARD profiles by mistake.
-my $today = `transdate -d+0`;
-chomp($today);
+chomp( my $today = `transdate -d+0` );
 my @cards;                        # Buffer of cards read from file for processing
 my @sortedCards;                  # Buffer of sorted possible candidate discard cards cards.
 my @finishedCards;                # List of cards to be written back to file.
@@ -472,6 +472,41 @@ sub getDiscardedItemsFromCard
 	return $itemKeyHashRef;
 }
 
+# Writes the finished Discard card list to file.
+# The format of the file is one card per line in the format:
+# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
+# param:  List of card details to write to file.
+# return: 
+# side effect: writes the $discardFile to the current directory.
+sub writeDiscardCardList
+{
+	my ( @cards ) = @_;
+	open( CARDS, ">$discardsFile" ) or die "Couldn't read '$discardsFile' because $!\n";
+	foreach ( @cards )
+	{
+		print CARDS "$_\n";
+	}
+	close( CARDS );
+	print "created '$discardsFile' in current directory.\n";
+}
+
+# Reads the list of discard cards.
+# param:  
+# return: List of cards in format: WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
+sub readDiscardFileList
+{
+	my @cards = ();
+	open( CARDS, "<$discardsFile" ) or die "Couldn't read '$discardsFile' because $!. Did you forget to create one with '-r'?\n";
+	while ( <CARDS> )
+	{
+		push( @cards, $_ );
+	}
+	close( CARDS );
+	chomp( @cards );
+	print "read '$discardsFile'\n";
+	return sort( @cards );
+}
+
 # Kicks off the setting of various switches.
 # param:
 # return:
@@ -483,27 +518,23 @@ sub init()
     $targetDicardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
     if ($opt{'r'})
     {
-        my $apiCmd = qq{seluser -p"DISCARD" -oUBDfachb | seluserstatus -iU -oUSj | selascii -iR -oF2F1F3F4F5F6F7F8F9};
-        my $results = `$apiCmd`;
-        @cards = split("\n", $results);
-        @sortedCards = sort(@cards);
-        # This is required to write files to the EPLAPP FS:
-        sysopen(OUT, "finished_discards.txt", O_WRONLY | O_TRUNC | O_CREAT) ||
-            die "Couldn't create list because of failure: $!\n";
-        foreach (@sortedCards)
+        
+        my $results = `$apiReportDISCARDStatus`;
+        my @cards = split( "\n", $results );
+		my @finalSelection = ();
+        foreach ( sort( @cards ) )
         {
-            if ($_ =~ m/DISCARDUNC/ or $_ =~ m/EPL-WEED/) # only keep UNC discard entries.
+            if ( $_ =~ m/DISCARDUNC/ or $_ =~ m/EPL-WEED/ ) # only keep UNC discard entries.
             {
                 next;
             }
-            if ($_ =~ m/DISCARD-BTGFTG/ or $_ =~ m/WITHDRAW-THIS-ITEM/ or $_ =~ m/ILS-DISCARD/)
+            if ( $_ =~ m/DISCARD-BTGFTG/ or $_ =~ m/WITHDRAW-THIS-ITEM/ or $_ =~ m/ILS-DISCARD/ )
             {
                 next;
             }
-            print OUT $_."00000000|0|\n";
+            push( @finalSelection, $_."00000000|0|" );
         }
-        close(OUT);
-        print "created new discard file in current directory.\n";
+        writeDiscardCardList( @finalSelection );
         exit( 1 );
     }
 	elsif ( $opt{'t'} )
@@ -512,159 +543,165 @@ sub init()
 		print "$result items discarded from card: $opt{'t'}\n" if ( $result );
 		exit( 1 );
 	}
+	
 	# Option 'e' converts the pipe-delimited data into an excel file. There is a requirement
 	# for excel.pl to be executable in custombin.
-	# param: none
+	# param:  none
 	# return: none
 	elsif ( $opt{'e'} )
 	{
-		open( CARDS, "<$discardsFile" ) or die "Couldn't read '$discardsFile' because of failure: $!\n";
+		my @cards = readDiscardFileList();
 		open( EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o Discards$today.xls -fggddnn" )
 			or die "excel.pl failed: $!\n";
-		while (<CARDS>)
+		foreach( @cards )
 		{
 			my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
 			print EXCEL "$id|$description|$dateCreated|$dateUsed|$itemCount|$converted|\n";
 		}
 		close(EXCEL);
-		close(CARDS);
 		exit( 1 );
 	}
     else
     {
-        sysopen(IN, "finished_discards.txt", O_RDONLY) ||
-            die "Couldn't open finished_discards.txt because: $!\n";
-        while (<IN>)
-        {
-            push(@cards, $_);
-        }
-        close(IN);
-        @sortedCards = sort(@cards);
-        print "read list successfully\n";
-    }
+		my @cards = readDiscardFileList();
+		my ( $runningTotal, $convertedTotal, @finishedCards ) = discard( @cards );
+		my $report = writeReport( $runningTotal, $convertedTotal );
+		# Write the file out again.
+		writeDiscardCardList( @finishedCards );
+		mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
+	}
 }
 
 ################
 # Main entry
 init();
-# set the allowable over-limit value. To adjust change fudgefactor above.
-$targetDicardItemCount = $targetDicardItemCount * $fudgeFactor + $targetDicardItemCount;
-print "discard item goal: $targetDicardItemCount\n";
-my $runningTotal   = 0;
-my $convertedTotal = 0;
-foreach (@sortedCards)
+
+sub discard
 {
-    chomp($_);
-    #print "processing: $_\n";
-    # split the fields so we can capture the reporting details:
-    # Barcode       | title of card (HC)  | D_init  | Last use| # | Converted/Removed.
-    # IDY-DISCARDCA6|IDY-DISCARD CAT ITEMS|6/11/2009|3/19/2012|618|147
-    # but we get this from the Sirsi query:
-    # LHL-DISCARDCA8|LHL-DISCARD CAT ITEMS|20110820|20120403|445|0|0|OK|
-    # and this from the finished_discards.txt file:
-	# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
-    my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
-    # let's do some reporting on the health of the cards:
-    if ($id =~ m/^\d{5,}/)
-    {
-        $misNamedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|";
-        next; # don't remove items from a mis-named card.
-    }
-    if ($holds > 0)
-    {
-        $holdsCards{$id} = $holds;
-    }
-    if ($bills > 0)
-    {
-        $billCards{$id} = $bills;
-    }
-	my $branchCode = substr($id, 0, 3);
-    if ($status eq "OK")
-    {
-        $okCards{$branchCode} += 1;
-    }
-	else
+	my ( @sortedCards ) = @_;
+	# set the allowable over-limit value. To adjust change fudgefactor above.
+	$targetDicardItemCount = $targetDicardItemCount * $fudgeFactor + $targetDicardItemCount;
+	print "discard item goal: $targetDicardItemCount\n";
+	my $runningTotal   = 0;
+	my $convertedTotal = 0;
+	foreach (@sortedCards)
 	{
-		$barredCards{$branchCode} += 1;
-	}
-    if ($itemCount > $targetDicardItemCount)
-    {
-        $overLoadedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status Item Count = $itemCount";
-    }
-	# Test if we are looking for a specific branch and if this card doesn't match skip it.
-    if ( $opt{'b'} and $opt{'b'} !~ m/($branchCode)/)
-	{
-		print "[Branch mode] skipping '$description'\n";
-	}
-	elsif ( $itemCount <= $targetDicardItemCount and $dateConverted == 0 ) # else check if it matches the day's quotas.
-    {
-		#print "my branch code is $branchCode and $opt{'b'} was selected\n";
-        if ($itemCount + $runningTotal <= $targetDicardItemCount)
-        {
-            # update the running total
-            $runningTotal += $itemCount;
-			# if convert not selected we will get the same recommendations tomorrow.
-			if ($opt{'c'})
+		# chomp($_);
+		#print "processing: $_\n";
+		# split the fields so we can capture the reporting details:
+		# Barcode       | title of card (HC)  | D_init  | Last use| # | Converted/Removed.
+		# IDY-DISCARDCA6|IDY-DISCARD CAT ITEMS|6/11/2009|3/19/2012|618|147
+		# but we get this from the Sirsi query:
+		# LHL-DISCARDCA8|LHL-DISCARD CAT ITEMS|20110820|20120403|445|0|0|OK|
+		# and this from the finished_discards.txt file:
+		# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
+		my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
+		# let's do some reporting on the health of the cards:
+		if ($id =~ m/^\d{5,}/)
+		{
+			$misNamedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|";
+			next; # don't remove items from a mis-named card.
+		}
+		if ($holds > 0)
+		{
+			$holdsCards{$id} = $holds;
+		}
+		if ($bills > 0)
+		{
+			$billCards{$id} = $bills;
+		}
+		my $branchCode = substr($id, 0, 3);
+		if ($status eq "OK")
+		{
+			$okCards{$branchCode} += 1;
+		}
+		else
+		{
+			$barredCards{$branchCode} += 1;
+		}
+		if ($itemCount > $targetDicardItemCount)
+		{
+			$overLoadedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status Item Count = $itemCount";
+		}
+		# Test if we are looking for a specific branch and if this card doesn't match skip it.
+		if ( $opt{'b'} and $opt{'b'} !~ m/($branchCode)/)
+		{
+			print "[Branch mode] skipping '$description'\n";
+		}
+		elsif ( $itemCount <= $targetDicardItemCount and $dateConverted == 0 ) # else check if it matches the day's quotas.
+		{
+			#print "my branch code is $branchCode and $opt{'b'} was selected\n";
+			if ($itemCount + $runningTotal <= $targetDicardItemCount)
 			{
-				my $converted = convertDiscards( $userKey );
-				if ($converted) # if conversion successful.
+				# update the running total
+				$runningTotal += $itemCount;
+				# if convert not selected we will get the same recommendations tomorrow.
+				if ($opt{'c'})
 				{
-					$dateConverted  = $today;
-					$convertedTotal += $converted; # change to the actual number converted items.
+					my $converted = convertDiscards( $userKey );
+					if ($converted) # if conversion successful.
+					{
+						$dateConverted  = $today;
+						$convertedTotal += $converted; # change to the actual number converted items.
+					}
 				}
+				# you always get a list of recommendations.
+				push(@recommendedCards, $id);
 			}
-			# you always get a list of recommendations.
-            push(@recommendedCards, $id);
-        }
-    }
-	# reconstitute the record for writing to file
-    my $record = "$id|$userKey|$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|$dateConverted|$converted|";
-    #print " processed: $record\n";
-    # rebuild the entry for writing to file.
-    push(@finishedCards, $record);
+		}
+		# reconstitute the record for writing to file
+		my $record = "$id|$userKey|$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|$dateConverted|$converted|";
+		#print " processed: $record\n";
+		# rebuild the entry for writing to file.
+		push( @finishedCards, $record );
+	}
+	return ( $runningTotal, $convertedTotal, @finishedCards );
 }
 
-# Write the file out again.
-sysopen(OUT, "finished_discards.txt", O_WRONLY | O_TRUNC | O_CREAT) ||
-    die "Couldn't create list because of failure: $!\n";
-foreach (@finishedCards)
+
+
+
+# Writes a report to string.
+# param:  running total string count of the total items discarded so far this run.
+# param:  convertedTotal string number of cards converted.
+# return: 
+sub writeReport( $$ )
 {
-    print OUT $_."\n";
-    #print $_."\n";
+	my ( $runningTotal, $convertedTotal ) = @_;
+	my $mail = "Discard item count: $runningTotal\nDiscard converted: $convertedTotal (#cards)\n";
+	$mail .= reportStatus("The following cards have holds:", %holdsCards);
+	$mail .= reportStatus("The following cards have bills:", %billCards);
+	$mail .= reportStatus("The following cards are too big for quota:", %overLoadedCards);
+	$mail .= reportStatus("The following cards have accidentally been given profile of DISCARD:", %misNamedCards);
+	$mail .= reportStatus("Total available DISCARD cards:", %okCards);
+	$mail .= reportStatus("Total barred DISCARD cards:", %barredCards);
+
+	if (!$opt{'q'})
+	{
+		print "$mail\n";
+	}
+	print "Convert the following cards:\n=== snip ===\n";
+	foreach ( @recommendedCards )
+	{
+		print "$_\n";
+		$mail .= "$_\n";
+	}
+	$mail .= "=== snip ===\n";
+	print "=== snip ===\n";
+	return $mail;
 }
-close(OUT);
-# finish reporting.
 
-$mail .= "Discard item count: $runningTotal\nDiscard converted: $convertedTotal (#cards)\n";
-$mail .= reportStatus("The following cards have holds:", %holdsCards);
-$mail .= reportStatus("The following cards have bills:", %billCards);
-$mail .= reportStatus("The following cards are too big for quota:", %overLoadedCards);
-$mail .= reportStatus("The following cards have accidentally been given profile of DISCARD:", %misNamedCards);
-$mail .= reportStatus("Total available DISCARD cards:", %okCards);
-$mail .= reportStatus("Total barred DISCARD cards:", %barredCards);
-
-if (!$opt{'q'})
-{
-	print "$mail\n";
-}
-print "Convert the following cards:\n=== snip ===\n";
-foreach (@recommendedCards)
-{
-    print "$_\n";
-	$mail .= "$_\n";
-}
-print "=== snip ===\n";
-
-
-################
-# Mail the results to the recipients.
-if ($opt{'m'})
+# Sends mail message.
+# param:  subject string.
+# param:  addressees string, space separated valid email addresses.
+# param:  mail string content of the message to send.
+# return: 
+sub mail( $$$ )
 {
     #-- send an email to user@localhost
-    my $subject = qq{"Discard"};
-    my $addressees = qq{$opt{'m'}};
+    my ( $subject, $addressees, $mail ) = @_;
     open(MAIL, "| /usr/bin/mailx -s $subject $addressees") || die "mailx failed: $!\n";
-    print MAIL "$mail\nHave a great day!";
+    print MAIL "$mail\nSigned: Discard.pl\n";
     close(MAIL);
 }
 
