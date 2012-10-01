@@ -74,8 +74,7 @@ use strict;
 use warnings;
 use vars qw/ %opt /;
 use Getopt::Std;
-# Use this for writing files to EPLAPP.
-use Fcntl;          # Needed for sysopen flags O_WRONLY etc.
+
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 # Environment setup required by cron to run script because its daemon runs
 # without assuming any environment settings and we need to use sirsi's.
@@ -104,6 +103,7 @@ chomp( my $discardRetentionPeriod = `transdate -d-90` );
 my $targetDicardItemCount = 2000;
 # This value is used needed because not all converted items get discarded.
 my $fudgeFactor           = 0.1;  # percentage of items permitted over target limit.
+############ TODO get rid of these globals.
 my %holdsCards;                   # list of cards that have holds on them
 my %overLoadedCards;              # cards that exceed the convert limit set with -n
 my %barCards;                     # List of cards that exceed 1000 items currently.
@@ -564,6 +564,7 @@ sub init()
     else
     {
 		my @cards = readDiscardFileList();
+		######## TODO fix this so it isn't so clumsy
 		my ( $runningTotal, $convertedTotal, @finishedCards ) = discard( @cards );
 		my $report = writeReport( $runningTotal, $convertedTotal );
 		# Write the file out again.
@@ -705,18 +706,43 @@ sub mail( $$$ )
     close(MAIL);
 }
 
+# Reports the contents of the supplied hash reference keys and their values.
+# param:  title string - title of the report.
+# param:  hash reference - list of items as keys and quantities as values.
+# return:
+################# TODO not used anywhere yet.
+sub reportCounts( $$ )
+{
+	my ( $reportHeader, $itemsHash ) = @_;
+	my ( $key, $value );
+	format TITLE=
 
-# Prints a report of the contents of the various collections of cards.
+@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$reportHeader
+-------------------------------------
+.
+	format RPT_FORM = 
+@<<<<<<<<<<<<< @##
+$key,   $value
+.
+	$~ = "TITLE";
+	write;
+	$~ = "RPT_FORM";
+	while ( ($key, $value) = each( %$itemsHash ) )
+	{
+		write;
+	}
+	$~ = "STDOUT";
+}
+
+# Prints a report of the of the argument hash reference.
 # param: report title
-# param: items to be reported
+# param: items hash reference of items to be reported.
 # return: string containing report results.
+# TODO change second arg to hash reference.
 sub reportStatus
 {
     my ($reportMessage, %items) = @_;
-	if (keys(%items) == 0)
-	{
-		return "";
-	}
     my $msg = $reportMessage."\n";
     while (my ($key, $value) = each(%items))
     {
