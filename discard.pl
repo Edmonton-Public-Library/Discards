@@ -77,6 +77,13 @@ use Getopt::Std;
 # Use this for writing files to EPLAPP.
 use Fcntl;          # Needed for sysopen flags O_WRONLY etc.
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
+# Environment setup required by cron to run script because its daemon runs
+# without assuming any environment settings and we need to use sirsi's.
+###############################################
+# *** Edit these to suit your environment *** #
+$ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin";
+$ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
+###############################################
 
 my $VERSION               = 1.5;
 my $DISC                  = 0b00000001;
@@ -87,6 +94,11 @@ my $SCTL                  = 0b00010000;
 my $ACCT                  = 0b00100000;
 my $HTIT                  = 0b01000000;
 my $HCPY                  = 0b10000000;
+# policy order is important since remove last copy, then remove last copy + holds
+# is not the same as remove last copy + holdsf then remove last copy.
+my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
+chomp( my $discardRetentionPeriod = `transdate -d-90` );
+#chomp( my $discardRetentionPeriod = `transdate -d-0` ); # just for testing.
 my $targetDicardItemCount = 2000;
 # This value is used needed because not all converted items get discarded.
 my $fudgeFactor           = 0.1;  # percentage of items permitted over target limit.
@@ -188,8 +200,8 @@ sub moveItemsToDISCARD( $ )
 	my ( $discardHashRef ) = shift;
 	# first job: create a file of the cat keys we have left on the hash ref.
 	my $barCodeFile = "$tmpDir/T_DISCARD_BARC.lst";
-	my $requestFile = "DISCARD_transaction_request.cmd";
-	my $responseFile= "DISCARD_transaction_reponse.log";
+	my $requestFile = "DISCARD_TXRQ.cmd";
+	my $responseFile= "DISCARD_TXRS.log";
 	writeTable( $barCodeFile, $discardHashRef );
 	# second job: get the barcodes.
 	my $barCodes = `cat $barCodeFile | selitem -iK -oBm 2>/dev/null`;
@@ -213,7 +225,8 @@ sub moveItemsToDISCARD( $ )
 	}
 	close( API_SERVER_TRANSACTION_FILE );
 	# fourth job: run the apiserver with the commands to convert the discards.
-	# `apiserver -h <$requestFile >$responseFile`;
+	`apiserver -h <$requestFile >>$responseFile`;
+	# report problems:
 }
 
 # Creates a change location transaction command.
@@ -307,21 +320,13 @@ sub getDischargeTransaction( $$$ )
 sub convertDiscards($)
 {
 	my $cardKey         = shift;
-	my $status          = 0;
-	# my $date3MonthsBack = `transdate -d-90`;
-	my $date3MonthsBack = `transdate -d-0`; # just for testing.
-	chomp($date3MonthsBack);
 	print "CONVERTING: $cardKey\n";
-	my $discardHashRef = selectItemsToDelete( $cardKey, $date3MonthsBack );
-	# policy order is important since remove last copy, then remove last copy + holds
-	# is not the same as remove last copy + holdsf then remove last copy.
-	my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
+	my $discardHashRef = selectItemsToDelete( $cardKey, $discardRetentionPeriod );
 	my $totalDiscards = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 	print "Total discards to process: $totalDiscards items.\n";
 	# move all discarded items to location DISCARD.
-	my $moveCount = moveItemsToDISCARD( $discardHashRef );
-    
-	return $status; # returns the size of the list.
+	my $convertCount = moveItemsToDISCARD( $discardHashRef );
+	return $convertCount; # returns the size of the list.
 }
 
 # Produces a hash of item keys for DISCARD conversion marking each item with the code 
@@ -499,7 +504,7 @@ sub init()
         }
         close(OUT);
         print "created new discard file in current directory.\n";
-        exit(0);
+        exit( 1 );
     }
 	elsif ( $opt{'t'} )
 	{
@@ -507,9 +512,26 @@ sub init()
 		print "$result items discarded from card: $opt{'t'}\n" if ( $result );
 		exit( 1 );
 	}
+	# Option 'e' converts the pipe-delimited data into an excel file. There is a requirement
+	# for excel.pl to be executable in custombin.
+	# param: none
+	# return: none
+	elsif ( $opt{'e'} )
+	{
+		open( CARDS, "<$discardsFile" ) or die "Couldn't read '$discardsFile' because of failure: $!\n";
+		open( EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o Discards$today.xls -fggddnn" )
+			or die "excel.pl failed: $!\n";
+		while (<CARDS>)
+		{
+			my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
+			print EXCEL "$id|$description|$dateCreated|$dateUsed|$itemCount|$converted|\n";
+		}
+		close(EXCEL);
+		close(CARDS);
+		exit( 1 );
+	}
     else
     {
-        # This is required to write files to the EPLAPP FS:
         sysopen(IN, "finished_discards.txt", O_RDONLY) ||
             die "Couldn't open finished_discards.txt because: $!\n";
         while (<IN>)
@@ -644,25 +666,6 @@ if ($opt{'m'})
     open(MAIL, "| /usr/bin/mailx -s $subject $addressees") || die "mailx failed: $!\n";
     print MAIL "$mail\nHave a great day!";
     close(MAIL);
-}
-
-# Option 'e' converts the pipe-delimited data into an excel file. There is a requirement
-# for excel.pl to be executable in custombin.
-# param: none
-# return: none
-if ($opt{'e'})
-{
-    sysopen(CARDS, $discardsFile, O_RDONLY) ||
-        die "Couldn't read '$discardsFile' because of failure: $!\n";
-    open(EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o Discards$today.xls -fggddnn")
-        || die "excel.pl failed: $!\n";
-    while (<CARDS>)
-    {
-        my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
-        print EXCEL "$id|$description|$dateCreated|$dateUsed|$itemCount|$converted|\n";
-    }
-    close(EXCEL);
-    close(CARDS);
 }
 
 
