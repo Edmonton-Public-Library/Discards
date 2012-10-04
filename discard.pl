@@ -74,13 +74,14 @@ use strict;
 use warnings;
 use vars qw/ %opt /;
 use Getopt::Std;
+use Cwd;
 
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 # Environment setup required by cron to run script because its daemon runs
 # without assuming any environment settings and we need to use sirsi's.
 ###############################################
 # *** Edit these to suit your environment *** #
-$ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin";
+$ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin:/usr/bin";
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
@@ -98,28 +99,24 @@ my $apiReportDISCARDStatus = qq{seluser -p"DISCARD" -oUBDfachb | seluserstatus -
 # policy order is important since remove last copy, then remove last copy + holds
 # is not the same as remove last copy + holdsf then remove last copy.
 my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
-chomp( my $discardRetentionPeriod = `transdate -d-90` );
+chomp( my $discardRetentionPeriod  = `transdate -d-90` );
 #chomp( my $discardRetentionPeriod = `transdate -d-0` ); # just for testing.
 my $targetDicardItemCount = 2000;
 # This value is used needed because not all converted items get discarded.
 my $fudgeFactor           = 0.1;  # percentage of items permitted over target limit.
-############ TODO get rid of these globals.
-my %holdsCards;                   # list of cards that have holds on them
-my %overLoadedCards;              # cards that exceed the convert limit set with -n
-my %barCards;                     # List of cards that exceed 1000 items currently.
-my %okCards;                      # List of cards whose status is OK (not BARRED).
-my %barredCards;                  # List of cards whose status is BARRED.
-my %billCards;                    # List of cards that have unpaid bills on them.
-my %misNamedCards;                # Cards that are given DISCARD profiles by mistake.
-chomp( my $today = `transdate -d+0` );
-my @cards;                        # Buffer of cards read from file for processing
-my @sortedCards;                  # Buffer of sorted possible candidate discard cards cards.
-my @finishedCards;                # List of cards to be written back to file.
-my @recommendedCards;             # Todays recommended cards to convert.
-my @convertCards;                 # Cards to be converted.
-my $discardsFile = "finished_discards.txt"; # Name of the discards file.
-my $tmpFileName  = qq{tmp_a};
-chomp( my $tmpDir= `getpathname tmp` );
+my $C_OK                  = 0b000001;
+my $C_OVERLOADED          = 0b000010;
+my $C_BARRED              = 0b000100;
+my $C_MISNAMED            = 0b001000;
+my $C_RECOMMEND           = 0b010000; # recommended cards get selected for conversion.
+my $C_CONVERTED           = 0b100000;
+chomp( my $today          = `transdate -d+0` );
+chomp( my $tmpDir         = `getpathname tmp` );
+chomp( my $pwdDir         = getcwd() );
+my $tmpFileName           = qq{$tmpDir/tmp_a};
+my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the discards file.
+my $requestFile           = qq{$pwdDir/DISCARD_TXRQ.cmd};
+my $responseFile          = qq{$pwdDir/DISCARD_TXRS.log};
 
 #
 # Message about this program and how to use it
@@ -141,8 +138,11 @@ usage: $0 [-xbrecq] [-n number_items] [-m email] [-t cardKey]
  -d        : turn on debugging output.
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
- -m "addrs": mail output to provided address
- -n number : sets the upper limit of the number of discards to process.
+ -m "addrs": mail output to provided address(es).
+ -n number : sets the upper limit of the number of discards to process. This is a 
+             two step process. The number on the card is used to get into the ballpark
+             of total to convert, but an exact number depends on the convert process
+			 and whether there are bills, holds etc. attached to any of the items.
  -q        : quiet mode, just print out the recommended cards. Email will still
              contain all stats.
  -r        : reset the list. Re-reads all discard cards and creates a new list.
@@ -164,7 +164,7 @@ sub readTable($)
 {
 	my ( $fileName ) = shift;
 	my $table = {};
-	open TABLE, "<$fileName" or die "Serialization error reading '$fileName' $!\n";
+	open( TABLE, "<$fileName" ) or die "Serialization error reading '$fileName' $!\n";
 	while (<TABLE>)
 	{
 		chomp;
@@ -200,8 +200,6 @@ sub moveItemsToDISCARD( $ )
 	my ( $discardHashRef ) = shift;
 	# first job: create a file of the cat keys we have left on the hash ref.
 	my $barCodeFile = "$tmpDir/T_DISCARD_BARC.lst";
-	my $requestFile = "DISCARD_TXRQ.cmd";
-	my $responseFile= "DISCARD_TXRS.log";
 	writeTable( $barCodeFile, $discardHashRef );
 	# second job: get the barcodes.
 	my $barCodes = `cat $barCodeFile | selitem -iK -oBm 2>/dev/null`;
@@ -209,7 +207,7 @@ sub moveItemsToDISCARD( $ )
 	my @barCodesLocations = split( '\n', $barCodes );
 	# third job: create the API command for discharge the item off the discard card.
 	# we first discharge the item then right after we change its location to DISCARD.
-	open( API_SERVER_TRANSACTION_FILE, ">$requestFile" ) or die "Couldn't write to '$requestFile' $!\n";
+	open( API_SERVER_TRANSACTION_FILE, ">>$requestFile" ) or die "Couldn't write to '$requestFile' $!\n";
 	my $transactionSequenceNumber = 0;
 	chomp( my $dateTime = `date +%Y%m%d%H%M%S` );
 	foreach  ( @barCodesLocations )
@@ -224,9 +222,6 @@ sub moveItemsToDISCARD( $ )
 		print API_SERVER_TRANSACTION_FILE getChangeLocationTransaction( $barCode, $transactionSequenceNumber, $currentLocation );
 	}
 	close( API_SERVER_TRANSACTION_FILE );
-	# fourth job: run the apiserver with the commands to convert the discards.
-	`apiserver -h <$requestFile >>$responseFile`;
-	# report problems:
 }
 
 # Creates a change location transaction command.
@@ -317,15 +312,16 @@ sub getDischargeTransaction( $$$ )
 # These functions perform the conversion if -c is used on the command line.
 # param:  User Key for discard card, like 659264.
 # return: integer number of cards converted or zero if none or on failure.
-sub convertDiscards($)
+sub convertDiscards( $ )
 {
-	my $cardKey         = shift;
+	my $cardKey        = shift;
 	print "CONVERTING: $cardKey\n";
+	return 999; #################### TODO remove after testing.
 	my $discardHashRef = selectItemsToDelete( $cardKey, $discardRetentionPeriod );
-	my $totalDiscards = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
+	my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 	print "Total discards to process: $totalDiscards items.\n";
 	# move all discarded items to location DISCARD.
-	my $convertCount = moveItemsToDISCARD( $discardHashRef );
+	my $convertCount   = moveItemsToDISCARD( $discardHashRef );
 	return $convertCount; # returns the size of the list.
 }
 
@@ -339,7 +335,7 @@ sub selectItemsToDelete
 	my ( $cardKey, $cutoffDate ) = @_;
 	print "checking holds\n";
 	my $discardHashRef = getDiscardedItemsFromCard( $cardKey, $cutoffDate );
-	open( TMP, ">$tmpFileName" ) or die "Error writing to tmp file: $!\n";
+	open( TMP, ">>$tmpFileName" ) or die "Error writing to '$tmpFileName': $!\n";
 	for my $key ( keys %$discardHashRef )
 	{
         print TMP "$key\n";
@@ -382,12 +378,12 @@ $key,   $value
 	foreach my $policy ( @policies )
 	{
 		print "reporting policy: ";
-		if    ( $policy == $LCPY )            { open( OUT, ">DISCARD_LCPY.lst" ) or die "Error: $!\n"; print "last copy\n"; }
-		elsif ( $policy == $BILL )            { open( OUT, ">DISCARD_BILL.lst" ) or die "Error: $!\n"; print "bills\n"; }
-		elsif ( $policy == $ORDR )            { open( OUT, ">DISCARD_ORDR.lst" ) or die "Error: $!\n"; print "items on order\n"; }
-		elsif ( $policy == $SCTL )            { open( OUT, ">DISCARD_SCTL.lst" ) or die "Error: $!\n"; print "serials\n"; }
-		elsif ( $policy == ( $HTIT | $LCPY ) ){ open( OUT, ">DISCARD_LCHT.lst" ) or die "Error: $!\n"; print "last copy with holds\n"; }
-		elsif ( $policy == $HCPY )            { open( OUT, ">DISCARD_HCPY.lst" ) or die "Error: $!\n"; print "copy holds\n"; }
+		if    ( $policy == $LCPY )            { open( OUT, ">>DISCARD_LCPY.lst" ) or die "Error: $!\n"; print "last copy\n"; }
+		elsif ( $policy == $BILL )            { open( OUT, ">>DISCARD_BILL.lst" ) or die "Error: $!\n"; print "bills\n"; }
+		elsif ( $policy == $ORDR )            { open( OUT, ">>DISCARD_ORDR.lst" ) or die "Error: $!\n"; print "items on order\n"; }
+		elsif ( $policy == $SCTL )            { open( OUT, ">>DISCARD_SCTL.lst" ) or die "Error: $!\n"; print "serials\n"; }
+		elsif ( $policy == ( $HTIT | $LCPY ) ){ open( OUT, ">>DISCARD_LCHT.lst" ) or die "Error: $!\n"; print "last copy with holds\n"; }
+		elsif ( $policy == $HCPY )            { open( OUT, ">>DISCARD_HCPY.lst" ) or die "Error: $!\n"; print "copy holds\n"; }
 		else  { print "unknown '$policy'\n"; }
 		while ( my ($key, $value) = each( %$discardHashRef ) )
 		{
@@ -487,7 +483,7 @@ sub writeDiscardCardList
 		print CARDS "$_\n";
 	}
 	close( CARDS );
-	print "created '$discardsFile' in current directory.\n";
+	print "created '$discardsFile'.\n";
 }
 
 # Reads the list of discard cards.
@@ -505,6 +501,33 @@ sub readDiscardFileList
 	chomp( @cards );
 	print "read '$discardsFile'\n";
 	return sort( @cards );
+}
+
+# Updates the list of discard cards with dates and totals for cards that have changes.
+# param:  card key hash reference key:userKey, value:total.
+# param:  entire list of cards.
+# return: new list of all cards with any changes recorded.
+sub updateResults
+{
+	my ( $cardHashRef, @cards ) = @_;
+	my @finishedCards = ();
+	foreach ( @cards )
+	{
+		# and this from the finished_discards.txt file:
+		# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
+		my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
+		if ( $cardHashRef->{ $userKey } )
+		{
+			$dateConverted = $today;
+			$converted     = $cardHashRef->{ $userKey };
+		}
+		# reconstitute the record for writing to file
+		my $record = "$id|$userKey|$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|$dateConverted|$converted|";
+		print " processed: $record\n";
+		# rebuild the entry for writing to file.
+		push( @finishedCards, $record );
+	}
+	return @finishedCards;
 }
 
 # Kicks off the setting of various switches.
@@ -535,12 +558,18 @@ sub init()
             push( @finalSelection, $_."00000000|0|" );
         }
         writeDiscardCardList( @finalSelection );
-        exit( 1 );
+		exit( 1 );
     }
-	elsif ( $opt{'t'} )
+	if ( $opt{'t'} )
 	{
+		# cleanup files that are dangerous to have around: $requestFile, $tmpFileName.
+		# request will have API commands which we don't run twice and tmpFileName will contain
+		# item keys from another process.
+		unlink( $requestFile ) if ( -s  $requestFile );
+		unlink( $tmpFileName ) if ( -s  $tmpFileName );
 		my $result = convertDiscards( $opt{'t'} );
 		print "$result items discarded from card: $opt{'t'}\n" if ( $result );
+		`apiserver -h <$requestFile >>$responseFile`;
 		exit( 1 );
 	}
 	
@@ -548,7 +577,7 @@ sub init()
 	# for excel.pl to be executable in custombin.
 	# param:  none
 	# return: none
-	elsif ( $opt{'e'} )
+	if ( $opt{'e'} )
 	{
 		my @cards = readDiscardFileList();
 		open( EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o Discards$today.xls -fggddnn" )
@@ -561,136 +590,126 @@ sub init()
 		close(EXCEL);
 		exit( 1 );
 	}
-    else
-    {
-		my @cards = readDiscardFileList();
-		######## TODO fix this so it isn't so clumsy
-		my ( $runningTotal, $convertedTotal, @finishedCards ) = discard( @cards );
-		my $report = writeReport( $runningTotal, $convertedTotal );
-		# Write the file out again.
-		writeDiscardCardList( @finishedCards );
-		mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
-	}
 }
 
 ################
 # Main entry
 init();
 
-sub discard
+my @cards = readDiscardFileList();
+my $cardHashRef    = {};
+my $convertHashRef = {};
+# card scanning sets bitmask including any convert recommendations.
+scanDiscardCards( $cardHashRef, @cards );
+if ( $opt{'c'} )
 {
-	my ( @sortedCards ) = @_;
+	# cleanup files that are dangerous to have around: $requestFile, $tmpFileName.
+	# request will have API commands which we don't run twice and tmpFileName will contain
+	# item keys from another process.
+	unlink( $requestFile ) if ( -s  $requestFile );
+	unlink( $tmpFileName ) if ( -s  $tmpFileName );
+	$convertHashRef = convert( $cardHashRef );
+	# run the apiserver with the commands to convert the discards.
+	# `apiserver -h <$requestFile >>$responseFile`;
+}
+@cards = updateResults( $convertHashRef, @cards );
+# Write the file out again.
+writeDiscardCardList( @cards );
+# write report
+printReports( $cardHashRef );
+# mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
+1;
+
+
+# Prints a formated report of card condition.
+# param:  hash reference of the DISCARD cards.
+# return:
+sub printReports( $ )
+{
+	my ( $cardHashRef ) = @_;
+	reportStatus( "Over quota cards:", $cardHashRef, $C_OVERLOADED );
+	reportStatus( "Incorrect profile of DISCARD:", $cardHashRef, $C_MISNAMED );
+	reportStatus( "BARRED cards:", $cardHashRef, $C_BARRED );
+	print "=== snip ===\n";
+	reportStatus( "Recommended cards:", $cardHashRef, $C_RECOMMEND );
+	print "=== snip ===\n";
+}
+
+# Scans the discard cards for their general condition.
+# param:  sortedCards list - sorted list of cards.
+# return: 
+#
+sub scanDiscardCards
+{
+	my ( $cardHashRef, @sortedCards ) = @_;
 	# set the allowable over-limit value. To adjust change fudgefactor above.
 	$targetDicardItemCount = $targetDicardItemCount * $fudgeFactor + $targetDicardItemCount;
 	print "discard item goal: $targetDicardItemCount\n";
 	my $runningTotal   = 0;
 	my $convertedTotal = 0;
-	foreach (@sortedCards)
+	foreach ( @sortedCards )
 	{
-		# chomp($_);
-		#print "processing: $_\n";
+		print "processing: $_\n";
 		# split the fields so we can capture the reporting details:
-		# Barcode       | title of card (HC)  | D_init  | Last use| # | Converted/Removed.
-		# IDY-DISCARDCA6|IDY-DISCARD CAT ITEMS|6/11/2009|3/19/2012|618|147
-		# but we get this from the Sirsi query:
-		# LHL-DISCARDCA8|LHL-DISCARD CAT ITEMS|20110820|20120403|445|0|0|OK|
-		# and this from the finished_discards.txt file:
 		# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
 		my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
+		$cardHashRef->{ $userKey } = $C_OK;
 		# let's do some reporting on the health of the cards:
 		if ($id =~ m/^\d{5,}/)
 		{
-			$misNamedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|";
-			next; # don't remove items from a mis-named card.
-		}
-		if ($holds > 0)
-		{
-			$holdsCards{$id} = $holds;
-		}
-		if ($bills > 0)
-		{
-			$billCards{$id} = $bills;
+			$cardHashRef->{ $userKey } |= $C_MISNAMED;
 		}
 		my $branchCode = substr($id, 0, 3);
-		if ($status eq "OK")
+		if ( $status =~ m/BARRED/ )
 		{
-			$okCards{$branchCode} += 1;
-		}
-		else
-		{
-			$barredCards{$branchCode} += 1;
+			$cardHashRef->{ $userKey } |= $C_BARRED;
 		}
 		if ($itemCount > $targetDicardItemCount)
 		{
-			$overLoadedCards{$id} = "$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status Item Count = $itemCount";
+			$cardHashRef->{ $userKey } |= $C_OVERLOADED;
+		}
+		if ( $dateConverted > 0 ) # skip card if it has already been converted.
+		{
+			$cardHashRef->{ $userKey } |= $C_CONVERTED;
 		}
 		# Test if we are looking for a specific branch and if this card doesn't match skip it.
-		if ( $opt{'b'} and $opt{'b'} !~ m/($branchCode)/)
+		elsif ( $opt{'b'} and $opt{'b'} =~ m/($branchCode)/ )
 		{
-			print "[Branch mode] skipping '$description'\n";
+			$cardHashRef->{ $userKey } |= $C_RECOMMEND;
 		}
-		elsif ( $itemCount <= $targetDicardItemCount and $dateConverted == 0 ) # else check if it matches the day's quotas.
+		elsif ( ( $itemCount + $runningTotal ) <= $targetDicardItemCount and $dateConverted == 0 )
 		{
-			#print "my branch code is $branchCode and $opt{'b'} was selected\n";
-			if ($itemCount + $runningTotal <= $targetDicardItemCount)
+			$cardHashRef->{ $userKey } |= $C_RECOMMEND;
+			# update the running total
+			$runningTotal += $itemCount;
+		}
+	}
+	return $runningTotal;
+}
+
+# Selects cards for conversion. This means that we look at the total items
+# on the card as a rough guide to how many will be converted.
+# param:  cardHashRef hash reference - keys: userId, or card's key, values: bitmap of cards condition.
+# return: hash reference of userKeys and total converted.
+sub convert( $ )
+{
+	my ( $cardsHashRef ) = shift;
+	my $totalsHashRef = {}; # Store the total for each card via key: userId value: total converted.
+	while ( my ( $userKey, $bitMap ) = each( %$cardsHashRef ) )
+	{
+		if ( ( $bitMap & $C_RECOMMEND ) == $C_RECOMMEND )
+		{
+			# output all the valid item keys to file ready for APIServer command.
+			my $converted = convertDiscards( $userKey );
+			if ( $converted ) # if conversion successful.
 			{
-				# update the running total
-				$runningTotal += $itemCount;
-				# if convert not selected we will get the same recommendations tomorrow.
-				if ($opt{'c'})
-				{
-					my $converted = convertDiscards( $userKey );
-					if ($converted) # if conversion successful.
-					{
-						$dateConverted  = $today;
-						$convertedTotal += $converted; # change to the actual number converted items.
-					}
-				}
-				# you always get a list of recommendations.
-				push(@recommendedCards, $id);
+				$totalsHashRef->{ $userKey } = $converted;
 			}
 		}
-		# reconstitute the record for writing to file
-		my $record = "$id|$userKey|$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|$dateConverted|$converted|";
-		#print " processed: $record\n";
-		# rebuild the entry for writing to file.
-		push( @finishedCards, $record );
 	}
-	return ( $runningTotal, $convertedTotal, @finishedCards );
+	return $totalsHashRef;
 }
 
-
-
-
-# Writes a report to string.
-# param:  running total string count of the total items discarded so far this run.
-# param:  convertedTotal string number of cards converted.
-# return: 
-sub writeReport( $$ )
-{
-	my ( $runningTotal, $convertedTotal ) = @_;
-	my $mail = "Discard item count: $runningTotal\nDiscard converted: $convertedTotal (#cards)\n";
-	$mail .= reportStatus("The following cards have holds:", %holdsCards);
-	$mail .= reportStatus("The following cards have bills:", %billCards);
-	$mail .= reportStatus("The following cards are too big for quota:", %overLoadedCards);
-	$mail .= reportStatus("The following cards have accidentally been given profile of DISCARD:", %misNamedCards);
-	$mail .= reportStatus("Total available DISCARD cards:", %okCards);
-	$mail .= reportStatus("Total barred DISCARD cards:", %barredCards);
-
-	if (!$opt{'q'})
-	{
-		print "$mail\n";
-	}
-	print "Convert the following cards:\n=== snip ===\n";
-	foreach ( @recommendedCards )
-	{
-		print "$_\n";
-		$mail .= "$_\n";
-	}
-	$mail .= "=== snip ===\n";
-	print "=== snip ===\n";
-	return $mail;
-}
 
 # Sends mail message.
 # param:  subject string.
@@ -706,52 +725,35 @@ sub mail( $$$ )
     close(MAIL);
 }
 
-# Reports the contents of the supplied hash reference keys and their values.
-# param:  title string - title of the report.
-# param:  hash reference - list of items as keys and quantities as values.
-# return:
-################# TODO not used anywhere yet.
-sub reportCounts( $$ )
-{
-	my ( $reportHeader, $itemsHash ) = @_;
-	my ( $key, $value );
-	format TITLE=
-
-@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-$reportHeader
--------------------------------------
-.
-	format RPT_FORM = 
-@<<<<<<<<<<<<< @##
-$key,   $value
-.
-	$~ = "TITLE";
-	write;
-	$~ = "RPT_FORM";
-	while ( ($key, $value) = each( %$itemsHash ) )
-	{
-		write;
-	}
-	$~ = "STDOUT";
-}
 
 # Prints a report of the of the argument hash reference.
 # param: report title
 # param: items hash reference of items to be reported.
 # return: string containing report results.
-# TODO change second arg to hash reference.
-sub reportStatus
+sub reportStatus( $$$ )
 {
-    my ($reportMessage, %items) = @_;
-    my $msg = $reportMessage."\n";
-    while (my ($key, $value) = each(%items))
-    {
-        if ($value) # required if there is an empty value.
+    my ( $reportMessage, $items, $whichBit ) = @_;
+	my ( $key, $value );
+	format RPT_STATUS_TITLE=
+
+@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$reportMessage
+-------------------------------------
+.
+	format RPT_STATUS_COUNTS = 
+@<<<<<<<<<<<<<
+$key
+.
+	$~ = "RPT_STATUS_TITLE";
+	write;
+	$~ = "RPT_STATUS_COUNTS";
+	while ( ( $key, $value ) = each( %$items ) )
+	{
+		if ( ( $value & $whichBit ) == $whichBit ) 
         {
-            $msg .= $key." => ".$value."\n";
-        }
-    }
-    $msg .= "\n";
-    return $msg;
+			write;
+		}
+	}
+	$~ = "STDOUT";
 }
 
