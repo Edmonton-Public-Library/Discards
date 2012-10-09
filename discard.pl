@@ -748,6 +748,17 @@ $cardName
 	$~ = "STDOUT";
 }
 
+# Creates a string with a what happened during conversion.
+# param:  converted card hash reference
+# param:  card names hash reference
+# return: string of the report for mailing.
+sub createSummary( $$ )
+{
+	my ( $convertHashRef, $cardNamesHashR ) = @_;
+	return "";
+}
+
+
 ################
 # Main entry
 init();
@@ -775,5 +786,6 @@ if ( $opt{'c'} )
 writeDiscardCardList( @cards );
 # write report
 showReports( $cardHashRef, $cardNamesHashR );
-# mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
+my $report = createSummary( $convertHashRef, $cardNamesHashR );
+mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
 1;
