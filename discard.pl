@@ -112,7 +112,7 @@ my $C_RECOMMEND           = 0b010000; # recommended cards get selected for conve
 my $C_CONVERTED           = 0b100000;
 chomp( my $today          = `transdate -d+0` );
 chomp( my $tmpDir         = `getpathname tmp` );
-chomp( my $pwdDir         = getcwd() );
+chomp( my $pwdDir         = getcwd() ); # change this to a dedicated DISCARD directory
 my $tmpFileName           = qq{$tmpDir/tmp_a};
 my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the discards file.
 my $requestFile           = qq{$pwdDir/DISCARD_TXRQ.cmd};
@@ -159,40 +159,74 @@ EOF
     exit;
 }
 
-# Reads the contents of a file into a hash reference.
-# param:  file name string - path of file to write to.
-# return: hash reference - table data.
-sub readTable( $ )
+# Writes the finished Discard card list to file.
+# The format of the file is one card per line in the format:
+# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
+# param:  List of card details to write to file.
+# return: 
+# side effect: writes the $discardFile to the current directory.
+sub writeDiscardCardList
 {
-	my ( $fileName ) = shift;
-	my $table = {};
-	open( TABLE, "<$fileName" ) or die "Serialization error reading '$fileName' $!\n";
-	while (<TABLE>)
+	my ( @cards ) = @_;
+	open( CARDS, ">$discardsFile" ) or die "Couldn't read '$discardsFile' because $!\n";
+	foreach ( @cards )
 	{
-		chomp;
-		$table->{$_} = 1;
+		print CARDS "$_\n";
 	}
-	close TABLE;
-	return $table;
+	close( CARDS );
+	print "created '$discardsFile'.\n" if ( $opt{'d'} );
 }
 
-# Writes the contents of a hash reference to file. Values are not stored.
-# param:  file name string - path of file to write to.
-# param:  table hash reference - data to write to file (keys only).
+# Reads the list of discard cards.
+# param:  
+# return: List of cards in format: WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
+sub readDiscardCardList
+{
+	my @cards = ();
+	open( CARDS, "<$discardsFile" ) or die "Couldn't read '$discardsFile' because $!. Did you forget to create one with '-r'?\n";
+	while ( <CARDS> )
+	{
+		push( @cards, $_ );
+	}
+	close( CARDS );
+	chomp( @cards );
+	print "read '$discardsFile'\n" if ( $opt{'d'} );
+	return sort( @cards );
+}
+
+# This function is intended to serialize a given table.
+# param:  table name string path of table.
+# param:  data hash reference of data to write.
 # return: 
 sub writeTable( $$ )
 {
-	my $fileName = shift;
-	my $table    = shift;
-	open TABLE, ">$fileName" or die "Serialization error writing '$fileName' $!\n";
-	for my $key (keys %$table)
+	my ( $tableName, $hashRef ) = @_;
+	open( TABLE, ">$tableName" ) or die "Couldn't write to '$tableName' $!\n";
+	for my $key ( keys %$hashRef )
 	{
 		print TABLE "$key\n";
 	}
-	close TABLE;
-	return $table;
+	close( TABLE );
+	print "serialized '$tableName'.\n" if ( $opt{'d'} );
 }
 
+# This function is intended to serialize a given table.
+# param:  table name string path of table.
+# param:  data hash reference of data to write.
+# return: 
+sub readTable( $$ )
+{
+	my ( $tableName, $hashRef ) = @_;
+	return if ( not -s $tableName );
+	open( TABLE, "<$tableName" ) or die "Couldn't read from '$tableName' $!\n";
+	while ( <TABLE> )
+	{
+		chomp( $_ );
+		$hashRef->{ $_ } = 1;
+	}
+	close( TABLE );
+	print "deserialized '$tableName'.\n" if ( $opt{'d'} );
+}
 
 # Creates entries that will move all items to location DISCARD via 
 # a API server transaction file.
@@ -226,6 +260,7 @@ sub createAPIServerTransactions( $ )
 	}
 	close( API_SERVER_TRANSACTION_FILE );
 	# The file is now ready for the apiserver command to be run against it.
+	return scalar( @barCodesLocations );
 }
 
 # Creates a change location transaction command.
@@ -342,7 +377,6 @@ sub selectReportPrepareTransactions( $$ )
 sub selectItemsToDelete
 {
 	my ( $cardKey, $cutoffDate ) = @_;
-	print "checking holds\n";
 	my $discardHashRef = getDiscardedItemsFromCard( $cardKey, $cutoffDate );
 	open( TMP, ">>$tmpFileName" ) or die "Error writing to '$tmpFileName': $!\n";
 	for my $key ( keys %$discardHashRef )
@@ -386,19 +420,21 @@ $key,   $value
 	
 	foreach my $policy ( @policies )
 	{
+		my $prevCards = {};
 		print "reporting policy: ";
-		if    ( $policy == $LCPY )            { open( OUT, ">>DISCARD_LCPY.lst" ) or die "Error: $!\n"; print "last copy\n"; }
-		elsif ( $policy == $BILL )            { open( OUT, ">>DISCARD_BILL.lst" ) or die "Error: $!\n"; print "bills\n"; }
-		elsif ( $policy == $ORDR )            { open( OUT, ">>DISCARD_ORDR.lst" ) or die "Error: $!\n"; print "items on order\n"; }
-		elsif ( $policy == $SCTL )            { open( OUT, ">>DISCARD_SCTL.lst" ) or die "Error: $!\n"; print "serials\n"; }
-		elsif ( $policy == ( $HTIT | $LCPY ) ){ open( OUT, ">>DISCARD_LCHT.lst" ) or die "Error: $!\n"; print "last copy with holds\n"; }
-		elsif ( $policy == $HCPY )            { open( OUT, ">>DISCARD_HCPY.lst" ) or die "Error: $!\n"; print "copy holds\n"; }
+		if    ( $policy == $LCPY )            { readTable( "$pwdDir/DISCARD_LCPY.lst", $prevCards ); print "last copy\n"; }
+		elsif ( $policy == $BILL )            { readTable( "$pwdDir/DISCARD_BILL.lst", $prevCards ); print "bills\n"; }
+		elsif ( $policy == $ORDR )            { readTable( "$pwdDir/DISCARD_ORDR.lst", $prevCards ); print "items on order\n"; }
+		elsif ( $policy == $SCTL )            { readTable( "$pwdDir/DISCARD_SCTL.lst", $prevCards ); print "serials\n"; }
+		elsif ( $policy == ( $HTIT | $LCPY ) ){ readTable( "$pwdDir/DISCARD_LCHT.lst", $prevCards ); print "last copy with holds\n"; }
+		elsif ( $policy == $HCPY )            { readTable( "$pwdDir/DISCARD_HCPY.lst", $prevCards ); print "copy holds\n"; }
 		else  { print "unknown '$policy'\n"; }
 		while ( my ($key, $value) = each( %$discardHashRef ) )
 		{
 			if ( ( $policy & $value ) == $policy )
 			{
-				print OUT "$key\n";
+				# print OUT "$key\n";
+				$prevCards->{ $key } = 1;
 				# remove the item from the list of discards since the policy matches a 'keep' policy.
 				# -------------------------
 				# revisit this. Chris thinks we can move all items to DISCARD since the remove report will 
@@ -407,7 +443,13 @@ $key,   $value
 				# delete( $discardHashRef->{ $key } );
 			}
 		}
-		close( OUT );
+		# close( OUT );
+		if    ( $policy == $LCPY )            { writeTable( "$pwdDir/DISCARD_LCPY.lst", $prevCards ); }
+		elsif ( $policy == $BILL )            { writeTable( "$pwdDir/DISCARD_BILL.lst", $prevCards ); }
+		elsif ( $policy == $ORDR )            { writeTable( "$pwdDir/DISCARD_ORDR.lst", $prevCards ); }
+		elsif ( $policy == $SCTL )            { writeTable( "$pwdDir/DISCARD_SCTL.lst", $prevCards ); }
+		elsif ( $policy == ( $HTIT | $LCPY ) ){ writeTable( "$pwdDir/DISCARD_LCHT.lst", $prevCards ); }
+		elsif ( $policy == $HCPY )            { writeTable( "$pwdDir/DISCARD_HCPY.lst", $prevCards ); }
 	}
 	return scalar( keys( %$discardHashRef ) );
 }
@@ -437,8 +479,8 @@ sub markItems
 	elsif ( $keyWord eq "WITH_BILLS" )          { print "checking bills ";     $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_ORDERS" )         { print "checking orders ";    $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ print "checking serials ";   $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { print "checking holds ";     $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { print "checking holds ";     $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { print "checking T holds ";   $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { print "checking C holds ";   $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
 	else  { print "skipping: '$keyWord'\n" if ( $opt{'d'} ); return; }
 	my @itemList  = split( "\n", $results );
 	print "completed, ".scalar( @itemList )." related hits\n";
@@ -475,41 +517,6 @@ sub getDiscardedItemsFromCard
 		$itemKeyHashRef->{ "$catKey|$callSeq|$copyNumber|" } = $DISC;
     }
 	return $itemKeyHashRef;
-}
-
-# Writes the finished Discard card list to file.
-# The format of the file is one card per line in the format:
-# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
-# param:  List of card details to write to file.
-# return: 
-# side effect: writes the $discardFile to the current directory.
-sub writeDiscardCardList
-{
-	my ( @cards ) = @_;
-	open( CARDS, ">$discardsFile" ) or die "Couldn't read '$discardsFile' because $!\n";
-	foreach ( @cards )
-	{
-		print CARDS "$_\n";
-	}
-	close( CARDS );
-	print "created '$discardsFile'.\n" if ( $opt{'d'} );
-}
-
-# Reads the list of discard cards.
-# param:  
-# return: List of cards in format: WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
-sub readDiscardFileList
-{
-	my @cards = ();
-	open( CARDS, "<$discardsFile" ) or die "Couldn't read '$discardsFile' because $!. Did you forget to create one with '-r'?\n";
-	while ( <CARDS> )
-	{
-		push( @cards, $_ );
-	}
-	close( CARDS );
-	chomp( @cards );
-	print "read '$discardsFile'\n" if ( $opt{'d'} );
-	return sort( @cards );
 }
 
 # Updates the list of discard cards with dates and totals for cards that have changes.
@@ -590,7 +597,7 @@ sub init()
 	# return: none
 	if ( $opt{'e'} )
 	{
-		my @cards = readDiscardFileList();
+		my @cards = readDiscardCardList();
 		open( EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o Discards$today.xls -fggddnn" )
 			or die "excel.pl failed: $!\n";
 		foreach( @cards )
@@ -677,6 +684,7 @@ sub convert( $$ )
 {
 	my ( $cardsHashRef, $cardNamesHashRef ) = @_;
 	my $totalsHashRef = {}; # Store the total for each card via key: userId value: total converted.
+	
 	while ( my ( $userKey, $bitMap ) = each( %$cardsHashRef ) )
 	{
 		if ( ( $bitMap & $C_RECOMMEND ) == $C_RECOMMEND )
@@ -744,7 +752,7 @@ $cardName
 # Main entry
 init();
 
-my @cards = readDiscardFileList();
+my @cards = readDiscardCardList();
 my $cardHashRef    = {};
 my $cardNamesHashR = {};
 my $convertHashRef = {};
@@ -760,7 +768,7 @@ if ( $opt{'c'} )
 	# TODO repeat this step for more items if the actual counts are low.
 	$convertHashRef = convert( $cardHashRef, $cardNamesHashR );
 	# run the apiserver with the commands to convert the discards.
-	# `apiserver -h <$requestFile >>$responseFile`;
+	`apiserver -h <$requestFile >>$responseFile`;
 }
 @cards = updateResults( $convertHashRef, @cards );
 # Write the file out again.
