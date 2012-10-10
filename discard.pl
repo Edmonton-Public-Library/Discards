@@ -74,6 +74,7 @@ use strict;
 use warnings;
 use vars qw/ %opt /;
 use Getopt::Std;
+use POSIX qw/ceil/;
 
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 # Environment setup required by cron to run script because its daemon runs
@@ -144,7 +145,7 @@ usage: $0 [-bBceMrRQx] [-n number_items] [-m email] [-t cardKey]
  -n number : sets the upper limit of the number of discards to process. This is a 
              two step process. The number on the card is used to get into the ballpark
              of total to convert, but an exact number depends on the convert process
-			 and whether there are bills, holds etc. attached to any of the items.
+             and whether there are bills, holds etc. attached to any of the items.
  -Q        : reports cards that are over-quota.
  -r        : reset the list. Re-reads all discard cards and creates a new list.
              other flags have no effect.
@@ -605,7 +606,7 @@ sub init()
 	# return: none
 	if ( $opt{'e'} )
 	{
-		writeCardListToExcel( "$excelFile" );
+		exportDiscardList( );
 		exit( 1 );
 	}
 }
@@ -614,9 +615,8 @@ sub init()
 # param:  file Name string - name of the file to write. Will clobber any existing file with same name.
 # return: 
 # side effect: writes an excel file in the chosen directory.
-sub writeCardListToExcel( $ )
+sub exportDiscardList( )
 {
-	my ( $excelFile ) = shift;
 	my @cards = readDiscardCardList();
 	open( EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o $excelFile -fggddnn" )
 		or die "Failed to write to excel file $!\n";
@@ -630,21 +630,28 @@ sub writeCardListToExcel( $ )
 
 # Prints a formated report of card condition.
 # param:  hash reference of the DISCARD cards.
-# return:
-sub showReports( $$ )
+# param:  hash reference of the DISCARD card names.
+# param:  sumCardsDone integer - of cards done.
+# param:  totalCards integer - total number of cards.
+# param:  totalItems integer - total number of items for discard.
+# return: string report with summary.
+sub showReports( $$$$$ )
 {
-	my ( $cardHashRef, $cardNamesRef ) = @_;
+	my ( $cardHashRef, $cardNamesRef, $sumCardsDone, $totalCards, $totalItems ) = @_;
 	reportStatus( "Over quota cards:", $cardHashRef, $C_OVERLOADED, $cardNamesRef ) if ( $opt{'Q'} );
 	reportStatus( "Incorrect profile of DISCARD:", $cardHashRef, $C_MISNAMED, $cardNamesRef ) if ( $opt{'M'} );
 	reportStatus( "BARRED cards:", $cardHashRef, $C_BARRED, $cardNamesRef ) if ( $opt{'B'} );
 	reportStatus( "Recommended cards:", $cardHashRef, $C_RECOMMEND, $cardNamesRef ) if ( $opt{'R'} );
-	my ( $convertHashRef, $cardNamesHashR ) = @_;
-	# report the number of items on each of the bins.
-	# report the percent of list complete.
-	# report the number of items waiting for REMOVE.
-	# remind the user to REMOVE items.
 	
-	return "";
+	my $report = "Discard status:\n";
+	# TODO report the number of items on each of the bins.
+	# report the percent of list complete.
+	$report .= "$sumCardsDone of $totalCards cards converted to date (".ceil(($sumCardsDone / $totalCards) * 100)."\%)\n"; 
+	# report the number of items waiting for REMOVE.
+	$report .= "$totalItems waiting for remove.\n";
+	# remind the user to REMOVE items.
+	$report .= "Please don't forget to run remove report if it isn't scheduled.\n";
+	return $report;
 }
 
 # Scans the discard cards for their general condition.
@@ -705,12 +712,12 @@ sub scanDiscardCards
 # on the card as a rough guide to how many will be converted.
 # param:  cardHashRef hash reference - keys: userId, or card's key, values: bitmap of cards condition.
 # param:  cardNamesHashRef hash reference - of card names keyed by user key of discard card.
+# param:  totalsHashRef hash reference - of card names keyed by total items converted as value.
 # return: hash reference of userKeys and total converted.
-sub convert( $$ )
+sub convert( $$$ )
 {
-	my ( $cardsHashRef, $cardNamesHashRef ) = @_;
-	my $totalsHashRef = {}; # Store the total for each card via key: userId value: total converted.
-	
+	my ( $cardsHashRef, $cardNamesHashRef, $totalsHashRef ) = @_;
+	my $totalItems = 0;
 	while ( my ( $userKey, $bitMap ) = each( %$cardsHashRef ) )
 	{
 		if ( ( $bitMap & $C_RECOMMEND ) == $C_RECOMMEND )
@@ -720,10 +727,11 @@ sub convert( $$ )
 			if ( $converted ) # if conversion successful.
 			{
 				$totalsHashRef->{ $userKey } = $converted;
+				$totalItems += $converted;
 			}
 		}
 	}
-	return $totalsHashRef;
+	return $totalItems;
 }
 
 # Sends mail message.
@@ -784,22 +792,24 @@ my @cards          = readDiscardCardList();
 my $cardHashRef    = {};
 my $cardNamesHashR = {};
 my $convertHashRef = {};
+my $totalItems     = 0;
 # card scanning sets bitmask including any convert recommendations.
 my ( $cardsDone, $cardsTotal ) = scanDiscardCards( $cardHashRef, $cardNamesHashR, @cards ); 
-if ( $cardsDone == $cardsTotal )
+if ( $cardsDone >= $cardsTotal )
 {
 	# If the list is finished back it up and remove it.
-	writeCardListToExcel( "$excelFile" );
+	exportDiscardList( );
+	my $report = "Discard cycle complete.\n ";
 	if ( -s "$excelFile" )
 	{
 		unlink( $discardsFile );
-		my $report = "'$discardsFile' backed up to '$excelFile'.\nCreating new list.\n";
+		$report .= "'$discardsFile' backed up to '$excelFile'.\nCreating new list.\n";
 		resetDiscardList();
 		mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
 	}
 	else
 	{
-		my $report = "couldn't backup '$discardsFile'. Not removing, but discards can't proceed until this list is removed.\n";
+		$report .= "couldn't backup '$discardsFile'. Not removing, but discards can't proceed until this list is removed.\n";
 		mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
 	}
 	exit( $ALL_CARDS_CONVERTED );
@@ -812,14 +822,14 @@ if ( $opt{'c'} )
 	unlink( $requestFile ) if ( -s  $requestFile );
 	unlink( $tmpFileName ) if ( -s  $tmpFileName );
 	# TODO repeat this step for more items if the actual counts are low.
-	$convertHashRef = convert( $cardHashRef, $cardNamesHashR );
+	$totalItems = convert( $cardHashRef, $cardNamesHashR, $convertHashRef );
 	# run the apiserver with the commands to convert the discards.
-	`apiserver -h <$requestFile >>$responseFile`;
+	# `apiserver -h <$requestFile >>$responseFile`;
 }
 @cards = updateResults( $convertHashRef, @cards );
 # Write the file out again.
 writeDiscardCardList( @cards );
 # write report
-my $report = showReports( $cardHashRef, $cardNamesHashR );
+my $report = showReports( $cardHashRef, $cardNamesHashR, $cardsDone, $cardsTotal, $totalItems );
 mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
 1;
