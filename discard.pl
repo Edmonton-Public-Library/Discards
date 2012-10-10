@@ -74,7 +74,6 @@ use strict;
 use warnings;
 use vars qw/ %opt /;
 use Getopt::Std;
-use Cwd;
 
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 # Environment setup required by cron to run script because its daemon runs
@@ -84,8 +83,8 @@ use Cwd;
 $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin:/usr/bin";
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
-
 my $VERSION               = 1.5;
+my $ALL_CARDS_CONVERTED   = 2;
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -117,6 +116,7 @@ my $tmpFileName           = qq{$tmpDir/tmp_a};
 my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the discards file.
 my $requestFile           = qq{$pwdDir/DISCARD_TXRQ.cmd};
 my $responseFile          = qq{$pwdDir/DISCARD_TXRS.log};
+my $excelFile             = qq{$pwdDir/Discards$today.xls};
 
 #
 # Message about this program and how to use it
@@ -546,6 +546,30 @@ sub updateResults
 	return @finishedCards;
 }
 
+# Creates a new list of discard cards.
+# param:  file name string - path to where to put the discard list.
+# return: 
+# side effect: creates a discard file in the argument path.
+sub resetDiscardList()
+{
+	my $results = `$apiReportDISCARDStatus`;
+	my @cards = split( "\n", $results );
+	my @finalSelection = ();
+	foreach ( sort( @cards ) )
+	{
+		if ( $_ =~ m/DISCARDUNC/ or $_ =~ m/EPL-WEED/ ) # only keep UNC discard entries.
+		{
+			next;
+		}
+		if ( $_ =~ m/DISCARD-BTGFTG/ or $_ =~ m/WITHDRAW-THIS-ITEM/ or $_ =~ m/ILS-DISCARD/ )
+		{
+			next;
+		}
+		push( @finalSelection, $_."00000000|0|" );
+	}
+	writeDiscardCardList( @finalSelection );
+}
+
 # Kicks off the setting of various switches.
 # param:
 # return:
@@ -557,23 +581,7 @@ sub init()
     $targetDicardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
     if ($opt{'r'})
     {
-        
-        my $results = `$apiReportDISCARDStatus`;
-        my @cards = split( "\n", $results );
-		my @finalSelection = ();
-        foreach ( sort( @cards ) )
-        {
-            if ( $_ =~ m/DISCARDUNC/ or $_ =~ m/EPL-WEED/ ) # only keep UNC discard entries.
-            {
-                next;
-            }
-            if ( $_ =~ m/DISCARD-BTGFTG/ or $_ =~ m/WITHDRAW-THIS-ITEM/ or $_ =~ m/ILS-DISCARD/ )
-            {
-                next;
-            }
-            push( @finalSelection, $_."00000000|0|" );
-        }
-        writeDiscardCardList( @finalSelection );
+        resetDiscardList();
 		exit( 1 );
     }
 	if ( $opt{'t'} )
@@ -597,17 +605,27 @@ sub init()
 	# return: none
 	if ( $opt{'e'} )
 	{
-		my @cards = readDiscardCardList();
-		open( EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o Discards$today.xls -fggddnn" )
-			or die "excel.pl failed: $!\n";
-		foreach( @cards )
-		{
-			my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
-			print EXCEL "$id|$description|$dateCreated|$dateUsed|$itemCount|$converted|\n";
-		}
-		close(EXCEL);
+		writeCardListToExcel( "$excelFile" );
 		exit( 1 );
 	}
+}
+
+# Writes the list of discard cards to an excel file.
+# param:  file Name string - name of the file to write. Will clobber any existing file with same name.
+# return: 
+# side effect: writes an excel file in the chosen directory.
+sub writeCardListToExcel( $ )
+{
+	my ( $excelFile ) = shift;
+	my @cards = readDiscardCardList();
+	open( EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o $excelFile -fggddnn" )
+		or die "Failed to write to excel file $!\n";
+	foreach( @cards )
+	{
+		my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
+		print EXCEL "$id|$description|$dateCreated|$dateUsed|$itemCount|$converted|\n";
+	}
+	close( EXCEL );
 }
 
 # Prints a formated report of card condition.
@@ -620,6 +638,13 @@ sub showReports( $$ )
 	reportStatus( "Incorrect profile of DISCARD:", $cardHashRef, $C_MISNAMED, $cardNamesRef ) if ( $opt{'M'} );
 	reportStatus( "BARRED cards:", $cardHashRef, $C_BARRED, $cardNamesRef ) if ( $opt{'B'} );
 	reportStatus( "Recommended cards:", $cardHashRef, $C_RECOMMEND, $cardNamesRef ) if ( $opt{'R'} );
+	my ( $convertHashRef, $cardNamesHashR ) = @_;
+	# report the number of items on each of the bins.
+	# report the percent of list complete.
+	# report the number of items waiting for REMOVE.
+	# remind the user to REMOVE items.
+	
+	return "";
 }
 
 # Scans the discard cards for their general condition.
@@ -632,8 +657,8 @@ sub scanDiscardCards
 	# set the allowable over-limit value. To adjust change fudgefactor above.
 	$targetDicardItemCount = $targetDicardItemCount * $fudgeFactor + $targetDicardItemCount;
 	print "discard item goal: $targetDicardItemCount\n";
-	my $runningTotal   = 0;
-	my $convertedTotal = 0;
+	my $runningTotal   = 0; # keep tally of items to convert so we know when to stop with recommandations.
+	my $totalCardsDone = 0; # total cards converted to date, used for reporting when conversion is done.
 	foreach ( @sortedCards )
 	{
 		print "processing: $_\n" if ( $opt{'d'} );
@@ -658,6 +683,7 @@ sub scanDiscardCards
 		if ( $dateConverted > 0 ) # skip card if it has already been converted.
 		{
 			$cardHashRef->{ $userKey } |= $C_CONVERTED;
+			$totalCardsDone += 1;
 		}
 		# Test if we are looking for a specific branch and if this card doesn't match skip it.
 		elsif ( $opt{'b'} and $opt{'b'} =~ m/($branchCode)/ )
@@ -672,7 +698,7 @@ sub scanDiscardCards
 		}
 		$cardNamesHashRef->{ $userKey } = $id;
 	}
-	return $runningTotal;
+	return ( $totalCardsDone, scalar( @sortedCards ) );
 }
 
 # Selects cards for conversion. This means that we look at the total items
@@ -748,27 +774,36 @@ $cardName
 	$~ = "STDOUT";
 }
 
-# Creates a string with a what happened during conversion.
-# param:  converted card hash reference
-# param:  card names hash reference
-# return: string of the report for mailing.
-sub createSummary( $$ )
-{
-	my ( $convertHashRef, $cardNamesHashR ) = @_;
-	return "";
-}
-
-
 ################
 # Main entry
 init();
 
-my @cards = readDiscardCardList();
+# create a new list if one doesn't exist yet.
+resetDiscardList() if ( not -s $discardsFile );
+my @cards          = readDiscardCardList();
 my $cardHashRef    = {};
 my $cardNamesHashR = {};
 my $convertHashRef = {};
 # card scanning sets bitmask including any convert recommendations.
-scanDiscardCards( $cardHashRef, $cardNamesHashR, @cards );
+my ( $cardsDone, $cardsTotal ) = scanDiscardCards( $cardHashRef, $cardNamesHashR, @cards ); 
+if ( $cardsDone == $cardsTotal )
+{
+	# If the list is finished back it up and remove it.
+	writeCardListToExcel( "$excelFile" );
+	if ( -s "$excelFile" )
+	{
+		unlink( $discardsFile );
+		my $report = "'$discardsFile' backed up to '$excelFile'.\nCreating new list.\n";
+		resetDiscardList();
+		mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
+	}
+	else
+	{
+		my $report = "couldn't backup '$discardsFile'. Not removing, but discards can't proceed until this list is removed.\n";
+		mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
+	}
+	exit( $ALL_CARDS_CONVERTED );
+}
 if ( $opt{'c'} )
 {
 	# cleanup files that are dangerous to have around: $requestFile, $tmpFileName.
@@ -785,7 +820,6 @@ if ( $opt{'c'} )
 # Write the file out again.
 writeDiscardCardList( @cards );
 # write report
-showReports( $cardHashRef, $cardNamesHashR );
-my $report = createSummary( $convertHashRef, $cardNamesHashR );
+my $report = showReports( $cardHashRef, $cardNamesHashR );
 mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
 1;
