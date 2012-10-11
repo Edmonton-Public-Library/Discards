@@ -1,63 +1,58 @@
 #!/usr/bin/env perl
 ########################################################################
 # Purpose: Makes educated guess at which DISCARD cards to convert.
-# Method:  This script recommends candidate DISCARD cards based on user
-#          supplied maximum discard item count; default 2000, and
-#          specified by the -n option. The script will open the last_card.txt
-#          file to read in the last DISCARD card successfully included
-#          for candidacy, and search from there. Cards that exceed the
-#          specified limit by more than 10% will be ignored and returned
-#          to the next time the script is run, since each card must be
-#          run only once per month.
+# Method:  
+# This script recommends candidate DISCARD cards based on user
+# supplied maximum discard item count; default 2000, and
+# changed with the -n option. Cards that exceed the 
+# specified limit by more than 10% will be ignored and can
+# be reported with -Q (think quota).
 #
-#          To do this make a list of all cards for all branches and mark
-#          each cards as DONE or PENDING. The PENDING can be reviewed in
-#          order from the beginning or from the oldest if you reach the
-#          end of the list before the end of the month.
+# Running the script with no switches will just output the 
+# convert target total and exit. Use -c to convert the items on 
+# recommended cards. While performing the conversion, cards are
+# checked for Bills, copy level holds and other policies 
+# which are recorded to predefined files. For example: if
+# and item has is a last copy and has a hold on it, its
+# item key is stored in the DISCARD_LCHC.lst file. There
+# is a .lst file for all the policies and they are maintained
+# by the script as it runs - that is - in our example if 
+# the item key already existed in the file, nothing further
+# happens. If, however, the key doesn't exist it will be added.
 #
-#          Example: select 1500 items max to discard starting with JPL
-#bash-3.00$ seluser -p"DISCARD" -y"EPLJPL" -oUBDfachb | seluserstatus -iU -oSj
-#Symphony $<userstatus> $<selection> 3.4 $<started_on> $<tuesday:u>, $<april:u> 10, 2012, 10:17 AM
-#Symphony $<user> $<selection> 3.4 $<started_on> $<tuesday:u>, $<april:u> 10, 2012, 10:17 AM
-#$(1228)
-#$(1239)
-#$(1511)
-#$(1496)
-#$(1238)
-#$(1502)
-#$(1503)
-#$(1246)
-#$(1247)
-#$(1263)
-#$(1266)
-#$(1262)
-#  $<users:u> $(1315)$<user> $<library> $<is> EPLJPL.
-#  $<users:u> $(1315)$<user> $<profile> $<is> DISCARD.
+# Every time a DISCARD card is converted, the items are all checked for
+# the following policies: 
+# last copy, bills, on order, serial controlled items, title level
+# holds and copy level holds. 
+# Every time an item matches a policy a bit is set for that
+# policy. Once all the policies are applied, each policy list
+# is updated with that item, where appropriate.
 #
-#                *** SQL ***
-#SELECT user_key,id,title,first_name,middle_name,name,suffix,preferred_name,name_display_preference,date_created,last_activity_date,number_of_charges,number_of_holds,number_of_bills FROM users
-#WHERE library IN (8) AND profile IN (10)
-#ORDER BY user_key
-#                *** SQL ***
+# Additionally cards are checked for quotas, misnaming, status
+# and the list of recommended cards. You can always run these
+# checks safely - the recommend flag is intended for use 
+# when discards are performed manually.
 #
-#  520775 $<user> $(1308)
-#  7 $<user> $(1309)
-#Symphony $<user> $<selection> $<finished_on> $<tuesday:u>, $<april:u> 10, 2012, 10:17 AM
-#JPL-DISCARDUNC|JPL-DISCARD Uncatalogued Items|20050802|20120408|0|0|0|OK|  <== Ignore UNC
-#JPL-DISCARDCA1|JPL-XXX DISCARD CAT ITEMS|20090206|20120312|800|0|0|BARRED| <== Include
-#JPL-DISCARDCA2|JPL-DISCARD CAT ITEMS|20090605|20120403|200|0|0|OK|         <== Include
-#JPL-DISCARDCA3|JPL-DISCARD CAT ITEMS|20090702|20120407|700|0|0|OK|         <== Ignore and mark for next time
-#JPL-DISCARDCA5|JPL-XXX DISCARD CAT ITEMS|20090827|20110615|500|0|0|BARRED| <== Include
-#JPL-DISCARDCA6|JPL-XXX DISCARD CAT ITEMS|20090827|20110615|0|0|0|BARRED|   <== Ignore
-#JPL-DISCARDCA4|JPL-XXX DISCARD CAT ITEMS|20090925|20110615|0|0|0|BARRED|   <== Ignore
-#  7 $<userstatus> $(1308)
-#  7 $<userstatus> $(1309)
-#Symphony $<userstatus> $<selection> $<finished_on> $<tuesday:u>, $<april:u> 10, 2012, 10:17 AM
+# Manual DISCARD instructions:
+# 1) Run the discard script without the '-c' switch, but include 
+# the '-R' switch. This will report cards that are recommended
+# for conversion. 
+# 2) In Workflows select schedule new report 
+# wizard and follow the discard instructions in ITS Docs.
+# 3) Run 'remove DISCARD items' from the schedule new report 
+# wizard.
+# 4) Use discard_report.pl -g finished_discards.txt -v 
+# to update the finished discard list.
+# 5) Rinse and repeat for the next card.
 #
-# Switch -m option mails results,
-# -x for help and -n to specify how many discards candidates to search
-# for (default: 2000). The script does not set any side effects either in
-# Symphony or EPLAPP.
+# Instructions to run from command line:
+# 1) run discard.pl -c
+# 2) Run 'remove DISCARD items' from the schedule new report 
+# wizard.
+#
+# Instructions for Cronned job:
+# Schedule with cron daily, schedule remove report daily then
+# 1) no action required.
 #
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
