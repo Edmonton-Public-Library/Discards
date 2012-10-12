@@ -124,7 +124,7 @@ sub usage()
 This script determines the recommended DISCARD cards to convert based on
 the user specified max number of items to process - default: 2000.
 
-usage: $0 [-bBceMrRQx] [-n number_items] [-m email] [-t cardKey]
+usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey]
 
  -B        : reports cards that have BARRED status.
  -b BRAnch : request a specific branch for discards. Selecting a branch must
@@ -141,6 +141,8 @@ usage: $0 [-bBceMrRQx] [-n number_items] [-m email] [-t cardKey]
              two step process. The number on the card is used to get into the ballpark
              of total to convert, but an exact number depends on the convert process
              and whether there are bills, holds etc. attached to any of the items.
+ -o        : report all items from the DISCARD location. Creates lists of those item's
+             retension reason.
  -Q        : reports cards that are over-quota.
  -r        : reset the list. Re-reads all discard cards and creates a new list.
              other flags have no effect.
@@ -393,6 +395,7 @@ sub selectItemsToDelete
 
 # Applys library discard policies to the discarded items and reports the
 # items that fail to match discardable discard material tests.
+# require: $tmpFileName which is a list of item keys separated by new lines.
 # param:  policies string - values to filter out non-discardable items.
 # param:  item key hash reference - values hold bit map test code results.
 #         See markItems() for more details.
@@ -439,7 +442,6 @@ $key,   $value
 				# delete( $discardHashRef->{ $key } );
 			}
 		}
-		# close( OUT );
 		if    ( $policy == $LCPY )            { writeTable( "$pwdDir/DISCARD_LCPY.lst", $prevCards ); }
 		elsif ( $policy == $BILL )            { writeTable( "$pwdDir/DISCARD_BILL.lst", $prevCards ); }
 		elsif ( $policy == $ORDR )            { writeTable( "$pwdDir/DISCARD_ORDR.lst", $prevCards ); }
@@ -475,8 +477,8 @@ sub markItems
 	elsif ( $keyWord eq "WITH_BILLS" )          { print "checking bills ";     $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_ORDERS" )         { print "checking orders ";    $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ print "checking serials ";   $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { print "checking T holds ";   $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { print "checking C holds ";   $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { print "checking T holds ";   $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oI  2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { print "checking C holds ";   $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oI  2>/dev/null`; }
 	else  { print "skipping: '$keyWord'\n" if ( $opt{'d'} ); return; }
 	my @itemList  = split( "\n", $results );
 	print "completed, ".scalar( @itemList )." related hits\n";
@@ -491,7 +493,7 @@ sub markItems
 		elsif ( $keyWord eq "WITH_ORDERS" )         { $discardHashRef->{ $itemKey } |= $ORDR; }
 		elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $discardHashRef->{ $itemKey } |= $SCTL; }
 		elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { $discardHashRef->{ $itemKey } |= $HTIT; }
-		elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { $discardHashRef->{ $itemKey } |= $HCPY; }
+		elsif ( $keyWord eq "WITH_COPY_HOLDS" )  	{ $discardHashRef->{ $itemKey } |= $HCPY; }
 		else  { ; }
 	}
 }
@@ -571,7 +573,7 @@ sub resetDiscardList()
 # return:
 sub init()
 {
-    my $opt_string = 'b:Bcdem:Mn:QrRt:x';
+    my $opt_string = 'b:Bcdem:Mn:oQrRt:x';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{'x'});                            # User needs help
     $targetDicardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
@@ -603,6 +605,39 @@ sub init()
 	{
 		exportDiscardList( );
 		exit( 1 );
+	}
+	# Creates lists of items left in location DISCARD catagorized by the policy they offend.
+	if ( $opt{'o'} )
+	{
+		# Get a list of items from the DISCARD location.
+		my $itemListResults    = `selitem -m"DISCARD" -oI 2>/dev/null`;
+		
+		my @itemKeyBarcodeList = split( "\n", $itemListResults );
+		my $discardHashRef     = {};
+		foreach my $line ( @itemKeyBarcodeList )
+		{
+			my ( $catKey, $callSeq, $copyNumber ) = split( '\|', $line );
+			$discardHashRef->{ "$catKey|$callSeq|$copyNumber|" } = $DISC;
+		}
+		# write the file that API calls will work against.
+		open( TMP, ">$tmpFileName" ) or die "Error writing to '$tmpFileName': $!\n";
+		for my $key ( keys %$discardHashRef )
+		{
+			print TMP "$key\n";
+		}
+		close( TMP );
+		# mark the items with against which policy they offend.
+		markItems( "LAST_COPY", $discardHashRef );
+		markItems( "WITH_BILLS", $discardHashRef );
+		markItems( "WITH_ORDERS", $discardHashRef );
+		markItems( "ARE_ACCOUNTABLE", $discardHashRef );
+		markItems( "UNDER_SERIAL_CONTROL", $discardHashRef );
+		markItems( "WITH_TITLE_HOLDS", $discardHashRef );
+		markItems( "WITH_COPY_HOLDS", $discardHashRef );
+		# report the results.
+		my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
+		print "Total DISCARD location total: $totalDiscards.\n";
+		exit( 0 );
 	}
 }
 
