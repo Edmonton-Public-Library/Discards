@@ -97,8 +97,6 @@ my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY
 chomp( my $discardRetentionPeriod  = `transdate -d-90` );
 #chomp( my $discardRetentionPeriod = `transdate -d-0` ); # just for testing.
 my $targetDicardItemCount = 2000;
-# This value is used needed because not all converted items get discarded.
-my $fudgeFactor           = 0.1;  # percentage of items permitted over target limit.
 my $C_OK                  = 0b000001;
 my $C_OVERLOADED          = 0b000010;
 my $C_BARRED              = 0b000100;
@@ -139,8 +137,7 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey]
  -M        : reports cards that are incorrectly identified with DISCARD profile.
  -n number : sets the upper limit of the number of discards to process. This is a 
              two step process. The number on the card is used to get into the ballpark
-             of total to convert, but an exact number depends on the convert process
-             and whether there are bills, holds etc. attached to any of the items.
+             of total to convert.
  -o        : report all items from the DISCARD location. Creates lists of those item's
              retension reason.
  -Q        : reports cards that are over-quota.
@@ -357,11 +354,11 @@ sub selectReportPrepareTransactions( $$ )
 {
 	my $cardKey        = shift;
 	my $cardName       = shift;
-	print "CONVERTING: $cardKey - $cardName\n";
+	print "CONVERTING: $cardKey - $cardName\n" if ( $opt{'d'} );
 	# return 555; # Use this to test return bogus results for reports and finished discard file.
 	my $discardHashRef = selectItemsToDelete( $cardKey, $discardRetentionPeriod );
 	my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
-	print "Total discards to process: $totalDiscards items.\n";
+	print "Total discards to process: $totalDiscards items.\n" if ( $opt{'d'} );
 	# move all discarded items to location DISCARD.
 	my $convertCount   = createAPIServerTransactions( $discardHashRef );
 	return $convertCount; # returns the number of items converted.
@@ -420,13 +417,12 @@ $key,   $value
 	foreach my $policy ( @policies )
 	{
 		my $prevCards = {};
-		print "reporting policy: ";
-		if    ( $policy == $LCPY )            { readTable( "$pwdDir/DISCARD_LCPY.lst", $prevCards ); print "last copy\n"; }
-		elsif ( $policy == $BILL )            { readTable( "$pwdDir/DISCARD_BILL.lst", $prevCards ); print "bills\n"; }
-		elsif ( $policy == $ORDR )            { readTable( "$pwdDir/DISCARD_ORDR.lst", $prevCards ); print "items on order\n"; }
-		elsif ( $policy == $SCTL )            { readTable( "$pwdDir/DISCARD_SCTL.lst", $prevCards ); print "serials\n"; }
-		elsif ( $policy == ( $HTIT | $LCPY ) ){ readTable( "$pwdDir/DISCARD_LCHT.lst", $prevCards ); print "last copy with holds\n"; }
-		elsif ( $policy == $HCPY )            { readTable( "$pwdDir/DISCARD_HCPY.lst", $prevCards ); print "copy holds\n"; }
+		if    ( $policy == $LCPY )            { readTable( "$pwdDir/DISCARD_LCPY.lst", $prevCards ); } # last copy
+		elsif ( $policy == $BILL )            { readTable( "$pwdDir/DISCARD_BILL.lst", $prevCards ); } # bills
+		elsif ( $policy == $ORDR )            { readTable( "$pwdDir/DISCARD_ORDR.lst", $prevCards ); } # items on order
+		elsif ( $policy == $SCTL )            { readTable( "$pwdDir/DISCARD_SCTL.lst", $prevCards ); } # serials
+		elsif ( $policy == ( $HTIT | $LCPY ) ){ readTable( "$pwdDir/DISCARD_LCHT.lst", $prevCards ); } # last copy with holds
+		elsif ( $policy == $HCPY )            { readTable( "$pwdDir/DISCARD_HCPY.lst", $prevCards ); } # copy holds
 		else  { print "unknown '$policy'\n"; }
 		while ( my ($key, $value) = each( %$discardHashRef ) )
 		{
@@ -452,7 +448,6 @@ $key,   $value
 	return scalar( keys( %$discardHashRef ) );
 }
 
-
 # Marks items that are not to be discarded. Any value that is greater than 0 will be preserved.
 # Values are bit ordered so the reason of the disqualification can be tested.
 # 1  = good to DISCARD
@@ -468,20 +463,20 @@ $key,   $value
 # return: 
 # side effect: modifies the value of hash keys by summing applicable disqualification codes.
 #              and 0 if there is no pediment to the item being discarded.
-sub markItems
+sub markItems( $$ )
 {
 	my ( $keyWord, $discardHashRef ) = @_;
 	my $results  = "";
 	# while this code looks amature-ish it is clearer and has no negative spacial or temporal impact on the script.
-	if    ( $keyWord eq "LAST_COPY" )           { print "checking last copy "; $results = `cat $tmpFileName | selcallnum    -iN -c"<2"     -oNS 2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_BILLS" )          { print "checking bills ";     $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_ORDERS" )         { print "checking orders ";    $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
-	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ print "checking serials ";   $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { print "checking T holds ";   $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oI  2>/dev/null`; }
-	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { print "checking C holds ";   $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oI  2>/dev/null`; }
+	if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcallnum    -iN -c"<2"     -oNS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_BILLS" )          { $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_ORDERS" )         { $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oI  2>/dev/null`; }
+	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oI  2>/dev/null`; }
 	else  { print "skipping: '$keyWord'\n" if ( $opt{'d'} ); return; }
 	my @itemList  = split( "\n", $results );
-	print "completed, ".scalar( @itemList )." related hits\n";
+	print "completed, ".scalar( @itemList )." related hits\n" if ( $opt{'d'} );
 	foreach my $itemKey ( @itemList )
 	{
 		chomp( $itemKey );
@@ -498,8 +493,11 @@ sub markItems
 	}
 }
 
-# Gets all of the items checked out to the argument discard card.
+# Gets all of the items checked out to the argument discard card. Error 111 like:
+# **error number 111 on charge read_charge_user_key start, cat=0 seq=0 copy=0 charge=0 primary=0 user=583474
+# is normal for cards that have nothing charged to them.
 # param:  cardKey string - User key for the discard card.
+# param:  cutoffDate string - latest date to consider for search (from beginning of time to cut-off date).
 # return: hash reference keys: item key, values: 0.
 sub getDiscardedItemsFromCard
 {
@@ -518,26 +516,26 @@ sub getDiscardedItemsFromCard
 }
 
 # Updates the list of discard cards with dates and totals for cards that have changes.
-# param:  card key hash reference key:userKey, value:total.
+# param:  card key hash of converted cards reference key:userKey, value:total.
 # param:  entire list of cards.
 # return: new list of all cards with any changes recorded.
 sub updateResults
 {
-	my ( $cardHashRef, @cards ) = @_;
+	my ( $convertedCardsHashRef, @cards ) = @_;
 	my @finishedCards = ();
 	foreach ( @cards )
 	{
 		# and this from the finished_discards.txt file:
 		# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
 		my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
-		if ( $cardHashRef->{ $userKey } )
+		if ( defined $convertedCardsHashRef->{ $userKey } ) # value may be '0' but must be defined.
 		{
 			$dateConverted = $today;
-			$converted     = $cardHashRef->{ $userKey };
+			$converted     = $convertedCardsHashRef->{ $userKey };
 		}
 		# reconstitute the record for writing to file
 		my $record = "$id|$userKey|$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|$dateConverted|$converted|";
-		# print " processed: $record\n";
+		print " processed: $record\n" if ( $opt{'d'} );
 		# rebuild the entry for writing to file.
 		push( @finishedCards, $record );
 	}
@@ -548,7 +546,7 @@ sub updateResults
 # param:  file name string - path to where to put the discard list.
 # return: 
 # side effect: creates a discard file in the argument path.
-sub resetDiscardList()
+sub resetDiscardList
 {
 	my $results = `$apiReportDISCARDStatus`;
 	my @cards = split( "\n", $results );
@@ -645,7 +643,7 @@ sub init()
 # param:  file Name string - name of the file to write. Will clobber any existing file with same name.
 # return: 
 # side effect: writes an excel file in the chosen directory.
-sub exportDiscardList( )
+sub exportDiscardList
 {
 	my @cards = readDiscardCardList();
 	open( EXCEL, "| excel.pl -t 'Patron ID|Name|Created|L.A.D|No. of Charges|No. of Converts|' -o $excelFile -fggddnn" )
@@ -678,23 +676,27 @@ sub showReports( $$$$$ )
 	# report the percent of list complete.
 	$report .= "$sumCardsDone of $totalCards cards converted to date (".ceil(($sumCardsDone / $totalCards) * 100)."\%)\n"; 
 	# report the number of items waiting for REMOVE.
-	$report .= "$totalItems waiting for remove.\n";
+	$report .= "$totalItems items waiting for remove.\n";
 	# remind the user to REMOVE items.
 	$report .= "Please don't forget to run remove report if it isn't scheduled.\n";
 	return $report;
 }
 
 # Scans the discard cards for their general condition.
-# param:  sortedCards list - sorted list of cards.
+# param:  sortedCards hash ref. - sorted list of cards.
+# param:  cardNamesHashRef hash ref - card names for reporting.
+# param:  runningTotal int - keep tally of items to convert so we know when to stop with recommandations.
 # return: total number of items reported on recommended cards. This number
 #         includes copies with holds, items with bills etc.
 sub scanDiscardCards
 {
-	my ( $cardHashRef, $cardNamesHashRef, @sortedCards ) = @_;
+	my ( $cardHashRef, $cardNamesHashRef, $runningTotal, @sortedCards ) = @_;
+	# empty the list of cards because we are going to reset all their bits again.
+	for ( keys %$cardHashRef )
+    {
+        delete $cardHashRef->{$_};
+    }
 	# set the allowable over-limit value. To adjust change fudgefactor above.
-	$targetDicardItemCount = $targetDicardItemCount * $fudgeFactor + $targetDicardItemCount;
-	print "discard item goal: $targetDicardItemCount\n";
-	my $runningTotal   = 0; # keep tally of items to convert so we know when to stop with recommandations.
 	my $totalCardsDone = 0; # total cards converted to date, used for reporting when conversion is done.
 	foreach ( @sortedCards )
 	{
@@ -727,15 +729,16 @@ sub scanDiscardCards
 		{
 			$cardHashRef->{ $userKey } |= $C_RECOMMEND;
 		}
-		elsif ( ( $itemCount + $runningTotal ) <= $targetDicardItemCount and $dateConverted == 0 )
+		elsif ( ( $itemCount + $runningTotal ) <= $targetDicardItemCount )
 		{
 			$cardHashRef->{ $userKey } |= $C_RECOMMEND;
 			# update the running total
 			$runningTotal += $itemCount;
 		}
+		# save the names of the cards.
 		$cardNamesHashRef->{ $userKey } = $id;
 	}
-	return ( $totalCardsDone, scalar( @sortedCards ) );
+	return $totalCardsDone;
 }
 
 # Selects cards for conversion. This means that we look at the total items
@@ -754,11 +757,9 @@ sub convert( $$$ )
 		{
 			# output all the valid item keys to file ready for APIServer command.
 			my $converted = selectReportPrepareTransactions( $userKey, $cardNamesHashRef->{ $userKey } );
-			if ( $converted ) # if conversion successful.
-			{
-				$totalsHashRef->{ $userKey } = $converted;
-				$totalItems += $converted;
-			}
+			print "I converted $converted from card '$cardNamesHashRef->{ $userKey }'\n";
+			$totalsHashRef->{ $userKey } = $converted;
+			$totalItems += $converted;
 		}
 	}
 	return $totalItems;
@@ -822,10 +823,11 @@ my @cards          = readDiscardCardList();
 my $cardHashRef    = {};
 my $cardNamesHashR = {};
 my $convertHashRef = {};
-my $totalItems     = 0;
+my $totalSoFar     = 0;
 # card scanning sets bitmask including any convert recommendations.
-my ( $cardsDone, $cardsTotal ) = scanDiscardCards( $cardHashRef, $cardNamesHashR, @cards ); 
-if ( $cardsDone >= $cardsTotal )
+my $cardsDone = scanDiscardCards( $cardHashRef, $cardNamesHashR, $totalSoFar, @cards ); 
+# if all the cards have been handled, its time to back it up and create a new one.
+if ( $cardsDone >= scalar( @cards ) )
 {
 	# If the list is finished back it up and remove it.
 	exportDiscardList( );
@@ -844,22 +846,31 @@ if ( $cardsDone >= $cardsTotal )
 	}
 	exit( $ALL_CARDS_CONVERTED );
 }
+# Start the conversion process if requested.
 if ( $opt{'c'} )
 {
 	# cleanup files that are dangerous to have around: $requestFile, $tmpFileName.
 	# request will have API commands which we don't run twice and tmpFileName will contain
 	# item keys from another process.
-	unlink( $requestFile ) if ( -s  $requestFile );
-	unlink( $tmpFileName ) if ( -s  $tmpFileName );
+	unlink( $requestFile ) if ( -s $requestFile );
+	unlink( $tmpFileName ) if ( -s $tmpFileName );
 	# TODO repeat this step for more items if the actual counts are low.
-	$totalItems = convert( $cardHashRef, $cardNamesHashR, $convertHashRef );
+	while ( $totalSoFar <= $targetDicardItemCount )
+	{
+		my $converted = convert( $cardHashRef, $cardNamesHashR, $convertHashRef );
+		$totalSoFar  += $converted;
+		@cards        = updateResults( $convertHashRef, @cards );
+		# rescan the list for changes. This will clear the recommended cards provide a recount of converted.
+		$cardsDone    = scanDiscardCards( $cardHashRef, $cardNamesHashR, $totalSoFar, @cards );
+		last if ( $cardsDone == scalar( @cards ) or $converted == 0 );
+	}
 	# run the apiserver with the commands to convert the discards.
-	# `apiserver -h <$requestFile >>$responseFile`;
+	# `apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
 }
-@cards = updateResults( $convertHashRef, @cards );
 # Write the file out again.
 writeDiscardCardList( @cards );
 # write report
-my $report = showReports( $cardHashRef, $cardNamesHashR, $cardsDone, $cardsTotal, $totalItems );
+my $report = showReports( $cardHashRef, $cardNamesHashR, $cardsDone, scalar( @cards ), $totalSoFar );
+print "$report\n";
 mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
 1;
