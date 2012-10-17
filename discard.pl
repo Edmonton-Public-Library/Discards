@@ -666,13 +666,17 @@ sub exportDiscardList
 sub showReports( $$$$$ )
 {
 	my ( $cardHashRef, $cardNamesRef, $sumCardsDone, $totalCards, $totalItems ) = @_;
+	my $report = "Discard status:\n";
 	reportStatus( "Over quota cards:", $cardHashRef, $C_OVERLOADED, $cardNamesRef ) if ( $opt{'Q'} );
 	reportStatus( "Incorrect profile of DISCARD:", $cardHashRef, $C_MISNAMED, $cardNamesRef ) if ( $opt{'M'} );
 	reportStatus( "BARRED cards:", $cardHashRef, $C_BARRED, $cardNamesRef ) if ( $opt{'B'} );
 	reportStatus( "Recommended cards:", $cardHashRef, $C_RECOMMEND, $cardNamesRef ) if ( $opt{'R'} );
-	
-	my $report = "Discard status:\n";
-	# TODO report the number of items on each of the bins.
+	my $count = reportStatus( "", $cardHashRef, $C_OVERLOADED, $cardNamesRef );
+	$report .= "Over quota cards: $count\n";
+	$count = reportStatus( "", $cardHashRef, $C_MISNAMED, $cardNamesRef );
+	$report .= "Incorrect profile of DISCARD: $count\n";
+	$count = reportStatus( "", $cardHashRef, $C_BARRED, $cardNamesRef );
+	$report .= "BARRED cards: $count\n";
 	# report the percent of list complete.
 	$report .= "$sumCardsDone of $totalCards cards converted to date (".ceil(($sumCardsDone / $totalCards) * 100)."\%)\n"; 
 	# report the number of items waiting for REMOVE.
@@ -789,6 +793,7 @@ sub reportStatus( $$$$ )
 {
     my ( $reportMessage, $items, $whichBit, $cardNames ) = @_;
 	my ( $key, $value, $cardName );
+	my $count = 0;
 	format RPT_STATUS_TITLE=
 
 @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -800,17 +805,19 @@ $reportMessage
 $cardName
 .
 	$~ = "RPT_STATUS_TITLE";
-	write;
+	write if ( $reportMessage ne "" );
 	$~ = "RPT_STATUS_COUNTS";
 	while ( ( $key, $value ) = each( %$items ) )
 	{
 		if ( ( $value & $whichBit ) == $whichBit ) 
         {
-			$cardName = $cardNames->{ $key };
-			write;
+			$count++;
+			$cardName =  $cardNames->{ $key };
+			write if ( $reportMessage ne "" );
 		}
 	}
 	$~ = "STDOUT";
+	return $count;
 }
 
 ################
