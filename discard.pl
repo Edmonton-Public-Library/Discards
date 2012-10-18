@@ -122,6 +122,11 @@ sub usage()
 This script determines the recommended DISCARD cards to convert based on
 the user specified max number of items to process - default: 2000.
 
+*** WARNING ***
+Over quota cards will stop a new list from being generated because the 
+list can't be finished.
+*** WARNING ***
+
 usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey]
 
  -B        : reports cards that have BARRED status.
@@ -711,10 +716,6 @@ sub scanDiscardCards
 		my $branchCode = substr($id, 0, 3);
 		$cardHashRef->{ $userKey } = $C_OK;
 		# let's do some reporting on the health of the cards:
-		if ($id =~ m/^\d{5,}/)
-		{
-			$cardHashRef->{ $userKey } |= $C_MISNAMED;
-		}
 		if ( $status =~ m/BARRED/ )
 		{
 			$cardHashRef->{ $userKey } |= $C_BARRED;
@@ -738,6 +739,13 @@ sub scanDiscardCards
 			$cardHashRef->{ $userKey } |= $C_RECOMMEND;
 			# update the running total
 			$runningTotal += $itemCount;
+		}
+		# if the card is mis-named it shouldn't be recommended.
+		if ($id =~ m/^\d{5,}/)
+		{
+			$cardHashRef->{ $userKey } |=  $C_MISNAMED;
+			# turn the recommend bit off even if it is off.
+			$cardHashRef->{ $userKey } &= ~$C_RECOMMEND;
 		}
 		# save the names of the cards.
 		$cardNamesHashRef->{ $userKey } = $id;
@@ -872,7 +880,7 @@ if ( $opt{'c'} )
 		last if ( $cardsDone == scalar( @cards ) or $converted == 0 );
 	}
 	# run the apiserver with the commands to convert the discards.
-	# `apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
+	`apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
 }
 # Write the file out again.
 writeDiscardCardList( @cards );
