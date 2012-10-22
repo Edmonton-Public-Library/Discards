@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          1.6 - Modified convert loop to select more cards.
 #          1.5 - APIConverts incorporated.
 #          1.0 - Production
 #          0.0 - develop
@@ -79,7 +80,7 @@ use POSIX qw/ceil/;
 $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin:/usr/bin";
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
-my $VERSION               = 1.5;
+my $VERSION               = 1.6;
 my $ALL_CARDS_CONVERTED   = 2;
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
@@ -558,14 +559,6 @@ sub resetDiscardList
 	my @finalSelection = ();
 	foreach ( sort( @cards ) )
 	{
-		if ( $_ =~ m/DISCARDUNC/ or $_ =~ m/EPL-WEED/ ) # only keep UNC discard entries.
-		{
-			next;
-		}
-		if ( $_ =~ m/DISCARD-BTGFTG/ or $_ =~ m/WITHDRAW-THIS-ITEM/ or $_ =~ m/ILS-DISCARD/ )
-		{
-			next;
-		}
 		push( @finalSelection, $_."00000000|0|" );
 	}
 	writeDiscardCardList( @finalSelection );
@@ -741,7 +734,7 @@ sub scanDiscardCards
 			$runningTotal += $itemCount;
 		}
 		# if the card is mis-named it shouldn't be recommended.
-		if ($id =~ m/^\d{5,}/)
+		if ( $description !~ m/DISCARD/ and $id !~ m/DISCARD/ )
 		{
 			$cardHashRef->{ $userKey } |=  $C_MISNAMED;
 			# turn the recommend bit off even if it is off.
@@ -859,7 +852,6 @@ if ( $cardsDone >= scalar( @cards ) )
 		$report .= "couldn't backup '$discardsFile'. Not removing, but discards can't proceed until this list is removed.\n";
 		mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
 	}
-	exit( $ALL_CARDS_CONVERTED );
 }
 # Start the conversion process if requested.
 if ( $opt{'c'} )
@@ -877,13 +869,19 @@ if ( $opt{'c'} )
 		@cards        = updateResults( $convertHashRef, @cards );
 		# rescan the list for changes. This will clear the recommended cards provide a recount of converted.
 		$cardsDone    = scanDiscardCards( $cardHashRef, $cardNamesHashR, $totalSoFar, @cards );
+		# write out the updated list.
+		writeDiscardCardList( @cards );
+		# stop if we have finished the list or remaining selections are disqualified.
 		last if ( $cardsDone == scalar( @cards ) or $converted == 0 );
+		# Select more cards if we didn't meet our total.
+		@cards        = readDiscardCardList();
+		$cardsDone    = scanDiscardCards( $cardHashRef, $cardNamesHashR, $totalSoFar, @cards );
 	}
 	# run the apiserver with the commands to convert the discards.
-	`apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
+	# `apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
 }
 # Write the file out again.
-writeDiscardCardList( @cards );
+# writeDiscardCardList( @cards );
 # write report
 my $report = showReports( $cardHashRef, $cardNamesHashR, $cardsDone, scalar( @cards ), $totalSoFar );
 print "$report\n";
