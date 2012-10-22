@@ -878,7 +878,7 @@ if ( $opt{'c'} )
 		$cardsDone    = scanDiscardCards( $cardHashRef, $cardNamesHashR, $totalSoFar, @cards );
 	}
 	# run the apiserver with the commands to convert the discards.
-	# `apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
+	`apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
 }
 # Write the file out again.
 # writeDiscardCardList( @cards );
