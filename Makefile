@@ -4,13 +4,16 @@ SERVER=eplapp.library.ualberta.ca
 USER=sirsi
 REMOTE=~/Unicorn/EPLwork/anisbet/
 LOCAL=~/projects/discards/
+LIBS=~/projects/
+APP=discard.pl
+EPL=epl.pm
 
 put: test
-	scp ${LOCAL}discard.pl ${USER}@${SERVER}:${REMOTE}discard.pl 
-	#scp ${LOCAL}discard_reports.pl ${USER}@${SERVER}:${REMOTE}discard_reports.pl 
+	scp ${LOCAL}${APP} ${USER}@${SERVER}:${REMOTE}
+	scp ${LOCAL}${EPL} ${USER}@${SERVER}:${REMOTE}
 get:
-	scp ${USER}@${SERVER}:${REMOTE}discard.pl ${LOCAL}
-	#scp ${USER}@${SERVER}:${REMOTE}discard_reports.pl ${LOCAL}
-test:
-	perl -c ${LOCAL}discard.pl
-	#perl -c ${LOCAL}discard_reports.pl
+	scp ${USER}@${SERVER}:${REMOTE}${APP} ${LOCAL}
+test: copy
+	perl -c ${LOCAL}${APP}
+copy: ${LIBS}${EPL}
+	cp ${LIBS}${EPL} ${LOCAL}

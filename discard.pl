@@ -71,6 +71,7 @@ use warnings;
 use vars qw/ %opt /;
 use Getopt::Std;
 use POSIX qw/ceil/;
+use epl;
 
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 # Environment setup required by cron to run script because its daemon runs
@@ -80,7 +81,7 @@ use POSIX qw/ceil/;
 $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin:/usr/bin";
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
-my $VERSION               = 1.6;
+my $VERSION               = "1.6.1";
 my $ALL_CARDS_CONVERTED   = 2;
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
@@ -141,9 +142,7 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey]
              default name is 'Discard[yyyymmdd].xls'.
  -m "addrs": mail output to provided address(es).
  -M        : reports cards that are incorrectly identified with DISCARD profile.
- -n number : sets the upper limit of the number of discards to process. This is a 
-             two step process. The number on the card is used to get into the ballpark
-             of total to convert.
+ -n number : sets the upper limit of the number of discards to process.
  -o        : report all items from the DISCARD location. Creates lists of those item's
              retension reason.
  -Q        : reports cards that are over-quota.
@@ -193,40 +192,6 @@ sub readDiscardCardList
 	chomp( @cards );
 	print "read '$discardsFile'\n" if ( $opt{'d'} );
 	return sort( @cards );
-}
-
-# This function is intended to serialize a given table.
-# param:  table name string path of table.
-# param:  data hash reference of data to write.
-# return: 
-sub writeTable( $$ )
-{
-	my ( $tableName, $hashRef ) = @_;
-	open( TABLE, ">$tableName" ) or die "Couldn't write to '$tableName' $!\n";
-	for my $key ( keys %$hashRef )
-	{
-		print TABLE "$key\n";
-	}
-	close( TABLE );
-	print "serialized '$tableName'.\n" if ( $opt{'d'} );
-}
-
-# This function is intended to serialize a given table.
-# param:  table name string path of table.
-# param:  data hash reference of data to write.
-# return: 
-sub readTable( $$ )
-{
-	my ( $tableName, $hashRef ) = @_;
-	return if ( not -s $tableName );
-	open( TABLE, "<$tableName" ) or die "Couldn't read from '$tableName' $!\n";
-	while ( <TABLE> )
-	{
-		chomp( $_ );
-		$hashRef->{ $_ } = 1;
-	}
-	close( TABLE );
-	print "deserialized '$tableName'.\n" if ( $opt{'d'} );
 }
 
 # Creates entries that will move all items to location DISCARD via 
@@ -886,4 +851,3 @@ if ( $opt{'c'} )
 my $report = showReports( $cardHashRef, $cardNamesHashR, $cardsDone, scalar( @cards ), $totalSoFar );
 print "$report\n";
 mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
-1;
