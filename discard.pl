@@ -57,7 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
-#          1.6 - Modified convert loop to select more cards.
+#          1.6 - Modified convert loop to select more cards and libs for epl.
 #          1.5 - APIConverts incorporated.
 #          1.0 - Production
 #          0.0 - develop
@@ -71,8 +71,6 @@ use warnings;
 use vars qw/ %opt /;
 use Getopt::Std;
 use POSIX qw/ceil/;
-use epl;
-
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 # Environment setup required by cron to run script because its daemon runs
 # without assuming any environment settings and we need to use sirsi's.
@@ -80,7 +78,10 @@ use epl;
 # *** Edit these to suit your environment *** #
 $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin:/usr/bin";
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
+$ENV{'PERL5LIB'} = "/s/sirsi/Unicorn/epl_perl_libs";
 ###############################################
+use epl; # for readTable and writeTable.
+
 my $VERSION               = "1.6.1";
 my $ALL_CARDS_CONVERTED   = 2;
 my $DISC                  = 0b00000001;
