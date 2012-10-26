@@ -65,12 +65,17 @@
 #          July 19, 2012 - Added '-fggddnn' and made consistent opt quoting.
 #
 ########################################################################
-
+BEGIN # Required for any script that requires the use of epl.pm or other custom modules.
+{
+	push @INC, "/s/sirsi/Unicorn/EPLwork/epl_perl_libs";      # This is for running 
+	push @INC, "/home/ilsdev/projects/epl_perl_libs"; # This is so we can test compile and run on dev machine
+}
 use strict;
 use warnings;
 use vars qw/ %opt /;
 use Getopt::Std;
 use POSIX qw/ceil/;
+use epl; # for readTable and writeTable.
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 # Environment setup required by cron to run script because its daemon runs
 # without assuming any environment settings and we need to use sirsi's.
@@ -78,11 +83,9 @@ use POSIX qw/ceil/;
 # *** Edit these to suit your environment *** #
 $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin:/usr/bin";
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
-$ENV{'PERL5LIB'} = "/s/sirsi/Unicorn/epl_perl_libs";
 ###############################################
-use epl; # for readTable and writeTable.
 
-my $VERSION               = "1.6.1";
+my $VERSION               = "1.6.2";
 my $ALL_CARDS_CONVERTED   = 2;
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
