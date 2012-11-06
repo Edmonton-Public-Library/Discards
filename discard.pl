@@ -675,8 +675,9 @@ sub scanDiscardCards
 		# split the fields so we can capture the reporting details:
 		# WOO-DISCARDCA6|671191|XXXWOO-DISCARD CAT ITEMS|20100313|20120507|1646|0|0|OK|00000000|0|
 		my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
-		my $branchCode = substr($id, 0, 3);
 		$cardHashRef->{ $userKey } = $C_OK;
+		# save the names of the cards.
+		$cardNamesHashRef->{ $userKey } = $id;
 		# let's do some reporting on the health of the cards:
 		if ( $status =~ m/BARRED/ )
 		{
@@ -691,16 +692,31 @@ sub scanDiscardCards
 			$cardHashRef->{ $userKey } |= $C_CONVERTED;
 			$totalCardsDone += 1;
 		}
-		# Test if we are looking for a specific branch and if this card doesn't match skip it.
-		elsif ( $opt{'b'} and $opt{'b'} =~ m/($branchCode)/ )
+		# Check cards that have not been converted.
+		else
 		{
-			$cardHashRef->{ $userKey } |= $C_RECOMMEND;
-		}
-		elsif ( ( $itemCount + $runningTotal ) <= $targetDicardItemCount )
-		{
-			$cardHashRef->{ $userKey } |= $C_RECOMMEND;
-			# update the running total
-			$runningTotal += $itemCount;
+			# process only branch specific cards.
+			if ( $opt{'b'} )
+			{
+				my $branchCode = substr($id, 0, 3);
+				if ( $opt{'b'} eq $branchCode )
+				{
+					# ensure we don't convert too many items by branch.
+					if ( ( $itemCount + $runningTotal ) <= $targetDicardItemCount )
+					{
+						$cardHashRef->{ $userKey } |= $C_RECOMMEND;
+						# keep track of how many items you've going to do so far
+						$runningTotal += $itemCount;
+					}
+				}
+			}
+			# if NOT branch process any card that comes our way this is doesn't push us over the limit will do.
+			elsif ( ( $itemCount + $runningTotal ) <= $targetDicardItemCount )
+			{
+				$cardHashRef->{ $userKey } |= $C_RECOMMEND;
+				# update items so far
+				$runningTotal += $itemCount;
+			}
 		}
 		# if the card is mis-named it shouldn't be recommended.
 		if ( $description !~ m/DISCARD/ and $id !~ m/DISCARD/ )
@@ -709,8 +725,6 @@ sub scanDiscardCards
 			# turn the recommend bit off even if it is off.
 			$cardHashRef->{ $userKey } &= ~$C_RECOMMEND;
 		}
-		# save the names of the cards.
-		$cardNamesHashRef->{ $userKey } = $id;
 	}
 	return $totalCardsDone;
 }
