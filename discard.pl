@@ -631,26 +631,24 @@ sub exportDiscardList
 # param:  totalCards integer - total number of cards.
 # param:  totalItems integer - total number of items for discard.
 # return: string report with summary.
-sub showReports( $$$$$ )
+sub showReports( $ )
 {
-	my ( $cardHashRef, $cardNamesRef, $sumCardsDone, $totalCards, $totalItems ) = @_;
+	my ( $totalItems ) = shift;
+	my $cardHashRef    = validateCards();   
+	my $sumCardsDone   = 0;
+	my $totalCards     = scalar( keys %$cardHashRef );
+	for ( keys %$cardHashRef )
+	{
+		$sumCardsDone++ if ( ( $cardHashRef->{ $_ } & $C_CONVERTED ) == $C_CONVERTED );
+	}
 	my $report = "Discard status:\n";
-	reportStatus( "Over quota cards:", $cardHashRef, $C_OVERLOADED, $cardNamesRef ) if ( $opt{'Q'} );
-	reportStatus( "Incorrect profile of DISCARD:", $cardHashRef, $C_MISNAMED, $cardNamesRef ) if ( $opt{'M'} );
-	reportStatus( "BARRED cards:", $cardHashRef, $C_BARRED, $cardNamesRef ) if ( $opt{'B'} );
-	reportStatus( "Recommended cards:", $cardHashRef, $C_RECOMMEND, $cardNamesRef ) if ( $opt{'R'} );
-	my $count = reportStatus( "", $cardHashRef, $C_OVERLOADED, $cardNamesRef );
-	$report .= "Over quota cards: $count\n";
-	$count = reportStatus( "", $cardHashRef, $C_MISNAMED, $cardNamesRef );
-	$report .= "Incorrect profile of DISCARD: $count\n";
-	$count = reportStatus( "", $cardHashRef, $C_BARRED, $cardNamesRef );
-	$report .= "BARRED cards: $count\n";
 	# report the percent of list complete.
-	$report .= "$sumCardsDone of $totalCards cards converted to date (".ceil(($sumCardsDone / $totalCards) * 100)."\%)\n"; 
+	$report .= "$sumCardsDone of $totalCards cards converted to date (".ceil(( $sumCardsDone / $totalCards ) * 100 )."\%)\n"; 
 	# report the number of items waiting for REMOVE.
 	$report .= "$totalItems items waiting for remove.\n";
 	# remind the user to REMOVE items.
 	$report .= "Please don't forget to run remove report if it isn't scheduled.\n";
+	$report .= reportStatus( $cardHashRef ) if ( $opt{'Q'} or $opt{'M'} or $opt{'B'} or $opt{'R'} );
 	return $report;
 }
 
@@ -815,40 +813,33 @@ sub mail( $$$ )
 }
 
 # Prints a report of the of the argument hash reference.
-# param: report title
-# param: items hash reference of items to be reported.
 # param: bit flag for the item being reported.
-# param: names of the cards as a hash ref with keys: card key, and value: name.
 # return: string containing report results.
-sub reportStatus( $$$$ )
+sub reportStatus( $ )
 {
-    my ( $reportMessage, $items, $whichBit, $cardNames ) = @_;
-	my ( $key, $value, $cardName );
-	my $count = 0;
-	format RPT_STATUS_TITLE=
-
-@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-$reportMessage
--------------------------------------
-.
-	format RPT_STATUS_COUNTS = 
-@<<<<<<<<<<<<<
-$cardName
-.
-	$~ = "RPT_STATUS_TITLE";
-	write if ( $reportMessage ne "" );
-	$~ = "RPT_STATUS_COUNTS";
-	while ( ( $key, $value ) = each( %$items ) )
+    my ( $cardHashRef ) = shift;
+	my ( $key, $bitMask);
+	my $cardName = 0;
+	my $convert = 0;
+	my $badName = 0;
+	my $overQuota = 0;
+	my $barred = 0;
+	my $status = "\nCard Status: id|Converted|BadName|OverQuota|Barred|\n\n";
+	while ( ( $key, $bitMask ) = each( %$cardHashRef ) )
 	{
-		if ( ( $value & $whichBit ) == $whichBit ) 
-        {
-			$count++;
-			$cardName =  $cardNames->{ $key };
-			write if ( $reportMessage ne "" );
-		}
+		$convert   = 0;
+		$badName   = 0;
+		$overQuota = 0;
+		$barred    = 0;
+		$cardName  = $key;
+		$bitMask   =  $cardHashRef->{ $key };
+		$convert   = 1 if (( $bitMask & $C_CONVERTED ) == $C_CONVERTED );
+		$badName   = 1 if (( $bitMask & $C_MISNAMED ) == $C_MISNAMED );
+		$overQuota = 1 if (( $bitMask & $C_OVERLOADED ) == $C_OVERLOADED );
+		$barred    = 1 if (( $bitMask & $C_BARRED ) == $C_BARRED );
+		$status .= $cardName."\|".$convert."\|".$badName."\|".$overQuota."\|".$barred."\|\n";
 	}
-	$~ = "STDOUT";
-	return $count;
+	return $status;
 }
 
 ################
@@ -906,6 +897,6 @@ if ( $opt{'c'} )
 	# `apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
 }
 
-my $report = "Reports not avaialable yet."; #showReports( $cardHashRef, $cardsDone, $totalCards, $totalItemsSoFar );
+my $report = showReports( $totalItemsSoFar );
 print "$report\n";
 mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
