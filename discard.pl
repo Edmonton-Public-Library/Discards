@@ -57,7 +57,11 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
-#          1.6.3 - By default gives cards with incorrect profile a convert date so they are skipped.
+#          2.0 - By default gives cards with incorrect profile a convert date so they are skipped. Refactored
+#          code base and tested against new epl.pm which would fail if the table it was trying to read didn't exist.
+#          general code fixes and simplified argument passing. Added validateCards at the beginning to handle 
+#          cards that have item counts of 0 or are mis-named. Removed formatting from report in favour of pipe-delimited
+#          text report. -Q, -M, -R and -B all show the same information but are not included in the report by default.
 #          1.6.2 - Fixed bug that didn't select by branch correctly, and now selects by branch and keeps item count below threshold.
 #          1.6.1 - Now uses epl.pm lib.
 #          1.6 - Modified convert loop to select more cards and libs for epl.
@@ -88,7 +92,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "1.6.3";
+my $VERSION               = "2.0";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
