@@ -117,8 +117,8 @@ my $C_RECOMMEND           = 0b010000; # recommended cards get selected for conve
 my $C_CONVERTED           = 0b100000;
 chomp( my $today          = `transdate -d+0` );
 chomp( my $tmpDir         = `getpathname tmp` );
-my $pwdDir                = qq{/s/sirsi/Unicorn/EPLwork/cronjobscripts/Discards};
-# my $pwdDir                = qq{./Discards};
+# my $pwdDir                = qq{/s/sirsi/Unicorn/EPLwork/cronjobscripts/Discards};
+my $pwdDir                = qq{./Discards};
 my $tmpFileName           = qq{$tmpDir/tmp_a};
 my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the discards file.
 my $requestFile           = qq{$pwdDir/DISCARD_TXRQ.cmd};
@@ -898,7 +898,7 @@ if ( $opt{'c'} )
 		last if ( $cardsDone == $totalCards or $converted == 0 );
 	}
 	# run the apiserver with the commands to convert the discards.
-	# `apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
+	`apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
 }
 
 my $report = showReports( $totalItemsSoFar );
