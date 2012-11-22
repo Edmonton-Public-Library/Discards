@@ -57,6 +57,8 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.0 - Modified code to use -i to read a list of long-checked-out discard items produced by
+#          'longcheckedout.pl -d"some/path"'.
 #          2.0 - By default gives cards with incorrect profile a convert date so they are skipped. Refactored
 #          code base and tested against new epl.pm which would fail if the table it was trying to read didn't exist.
 #          general code fixes and simplified argument passing. Added validateCards at the beginning to handle 
@@ -92,7 +94,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "2.0";
+my $VERSION               = "3.0";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -117,8 +119,8 @@ my $C_RECOMMEND           = 0b010000; # recommended cards get selected for conve
 my $C_CONVERTED           = 0b100000;
 chomp( my $today          = `transdate -d+0` );
 chomp( my $tmpDir         = `getpathname tmp` );
-my $pwdDir                = qq{/s/sirsi/Unicorn/EPLwork/cronjobscripts/Discards};
-# my $pwdDir                = qq{./Discards};
+# my $pwdDir                = qq{/s/sirsi/Unicorn/EPLwork/cronjobscripts/Discards};
+my $pwdDir                = qq{./};
 my $tmpFileName           = qq{$tmpDir/tmp_a};
 my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the discards file.
 my $requestFile           = qq{$pwdDir/DISCARD_TXRQ.cmd};
@@ -140,7 +142,7 @@ Over quota cards will stop a new list from being generated because the
 list can't be finished.
 *** WARNING ***
 
-usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey]
+usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path]
 
  -B        : reports cards that have BARRED status.
  -b BRAnch : request a specific branch for discards. Selecting a branch must
@@ -151,6 +153,7 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey]
  -d        : turn on debugging output.
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
+ -i path   : process items from a long-checked-out discard list. Updates $discardsFile then exits.
  -m "addrs": mail output to provided address(es).
  -M        : reports cards that are incorrectly identified with DISCARD profile.
  -n number : sets the upper limit of the number of discards to process.
@@ -164,6 +167,7 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey]
  -x        : this (help) message
 
 example: $0 -ecq -n 1500 -m anisbet\@epl.ca -b MNA
+example: $0 -n 2500 -m anisbet\@epl.ca -i"./LCOdiscard.lst"
 Version: $VERSION
 
 EOF
@@ -332,11 +336,12 @@ sub getDischargeTransaction( $$$ )
 # more efficient if we run the apiserver against all.
 # param:  User Key for discard card, like 659264.
 # return: integer number of cards converted or zero if none or on failure.
-sub selectReportPrepareTransactions( $ )
+sub selectReportPrepareCardTransactions( $ )
 {
 	my $cardKey        = shift;
 	# return 555; # Use this to test return bogus results for reports and finished discard file.
-	my $discardHashRef = selectItemsToDelete( $cardKey, $discardRetentionPeriod );
+	my $discardHashRef = getDiscardedItemsFromCard( $cardKey, $discardRetentionPeriod );
+	$discardHashRef    = sortSelectedItems( $discardHashRef );
 	my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 	print "Total discards to process: $totalDiscards items.\n" if ( $opt{'d'} );
 	# move all discarded items to location DISCARD.
@@ -344,15 +349,48 @@ sub selectReportPrepareTransactions( $ )
 	return $convertCount; # returns the number of items converted.
 }
 
+# This function performs all the high level activities of converting items
+# to discard, with the exception of actually running the apiserver. This is 
+# because we want to append all server transactions to one file an then run 
+# it after all cards for the day have been converted. The apiserver is much
+# more efficient if we run the apiserver against all.
+# param:  path to the long-checked-out discard file.
+# param:  hash reference of all the discard cards key:User Key value: items converted.
+# return: integer number of cards converted or zero if none or on failure.
+sub selectReportPrepareItemTransactions( $$ )
+{
+	my $longCheckedOutDiscardFile = shift;
+	my $convertedCardsHashRef     = shift;
+	# return 555; # Use this to test return bogus results for reports and finished discard file.
+	my $discardHashRef = getItemsFromLongCheckedOutList( $longCheckedOutDiscardFile, $convertedCardsHashRef );
+	$discardHashRef    = sortSelectedItems( $discardHashRef );
+	my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
+	my $listSize = getLongCheckedOutListSize();
+	print "Total discards to process: $totalDiscards of $listSize items.\n" if ( $opt{'d'} );
+	# move all discarded items to location DISCARD.
+	my $convertCount   = createAPIServerTransactions( $discardHashRef );
+	return $convertCount; # returns the number of items converted.
+}
+
+# Returns the number of discarded items on the long-checked-out list.
+# param:  
+# return: int number of items on the list.
+sub getLongCheckedOutListSize()
+{
+	my $count = 0;
+	open( LIST, "<$opt{'i'}" ) or die "Error: failed to read $opt{'i'}, $!\n";
+	$count++ while (<LIST>);
+	close( LIST );
+	return $count;
+}
+
 # Produces a hash of item keys for DISCARD conversion marking each item with the code 
 # for exclusion. If the code is zero the item is cleared for conversion and removal.
-# param:  cardKey string - key of the discard card.
-# param:  cutoffDate string - date 
+# param:  hash ref of discard cards.
 # return: hash reference of item keys -> exclude code where:
-sub selectItemsToDelete( $$ )
+sub sortSelectedItems( $ )
 {
-	my ( $cardKey, $cutoffDate ) = @_;
-	my $discardHashRef = getDiscardedItemsFromCard( $cardKey, $cutoffDate );
+	my $discardHashRef = shift;
 	open( TMP, ">>$tmpFileName" ) or die "Error writing to '$tmpFileName': $!\n";
 	for my $key ( keys %$discardHashRef )
 	{
@@ -473,6 +511,32 @@ sub markItems( $$ )
 	}
 }
 
+# Gets upto the specified number of items from the long-checked-out list.
+# param:  path to the long-checked-out discard file.
+# param:  hash reference of converted cards key: user_key value: converted count.
+# return: hash reference keys: item key, values: 1.
+sub getItemsFromLongCheckedOutList( $$ )
+{
+	my $LCHODiscardList    = shift;
+	my $discardCardHashRef = shift;
+	open( LCOL, "<$LCHODiscardList" ) or die "Error, $LCHODiscardList: $!\n";
+	my $itemKeyHashRef = {};
+	while( <LCOL> )
+	{
+		# stop if we have exceeded the maximum number of discards for today.
+		last if ( keys %$itemKeyHashRef  >= $targetDiscardItemCount );
+		# a line out of the longcheckedout.lst looks like:
+		# cat key|seq|copy num|datelastactivity|UserBC|Profile|Lib|Charges|Holds|Bills|User key|status|
+		# 1012012|1|1|201208221607|LON-DISCARD4|DISCARD|EPLLON|1745|0|0|612885|BARRED|
+		my ( $catKey, $callSeq, $copyNumber, $dateTime, $barcode, $profile, $library, $charges, $holds, $bills, $userKey, $status ) = split( '\|', $_ );
+		$itemKeyHashRef->{ "$catKey|$callSeq|$copyNumber|" } = $DISC;
+		# now add 1 to the count of items converted for converted cards.
+		$discardCardHashRef->{ $userKey }++;
+	}
+	close( LCOL );
+	return $itemKeyHashRef;
+}
+
 # Gets all of the items checked out to the argument discard card. Error 111 like:
 # **error number 111 on charge read_charge_user_key start, cat=0 seq=0 copy=0 charge=0 primary=0 user=583474
 # is normal for cards that have nothing charged to them.
@@ -543,7 +607,7 @@ sub resetDiscardList
 # return:
 sub init()
 {
-    my $opt_string = 'b:Bcdem:Mn:oQrRt:x';
+    my $opt_string = 'b:Bcdei:m:Mn:oQrRt:x';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{'x'});                            # User needs help
     $targetDiscardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
@@ -559,14 +623,11 @@ sub init()
 		# item keys from another process.
 		unlink( $requestFile ) if ( -s  $requestFile );
 		unlink( $tmpFileName ) if ( -s  $tmpFileName );
-		# chomp( my $name = `echo $opt{'t'} | seluser -iK -oB 2>/dev/null` );
-		# chop( $name ); # remove the trailing '|'.
-		my $result = selectReportPrepareTransactions( $opt{'t'} );
+		my $result = selectReportPrepareCardTransactions( $opt{'t'} );
 		print "$result items discarded from card: $opt{'t'}\n" if ( $result );
 		`apiserver -h <$requestFile >>$responseFile`;
 		exit( 1 );
 	}
-	
 	# Option 'e' converts the pipe-delimited data into an excel file. There is a requirement
 	# for excel.pl to be executable in custombin.
 	# param:  none
@@ -647,7 +708,15 @@ sub showReports( $ )
 	}
 	my $report = "Discard status:\n";
 	# report the percent of list complete.
-	$report .= "$sumCardsDone of $totalCards cards converted to date (".ceil(( $sumCardsDone / $totalCards ) * 100 )."\%)\n"; 
+	if ( $opt{'i'} )
+	{
+		my $listSize = getLongCheckedOutListSize();
+		$report .= "$totalItems of $listSize items converted (".ceil(( $totalItems / $listSize ) * 100 )."\%)\n";
+	}
+	else
+	{
+		$report .= "$sumCardsDone of $totalCards cards converted to date (".ceil(( $sumCardsDone / $totalCards ) * 100 )."\%)\n";
+	}		
 	# report the number of items waiting for REMOVE.
 	$report .= "$totalItems items waiting for remove.\n";
 	# remind the user to REMOVE items.
@@ -658,7 +727,7 @@ sub showReports( $ )
 
 # Scans the discard cards for their general condition.
 # param:  sortedCards hash ref. - sorted list of cards and state if any.
-# param:  runningTotal int - keep tally of items to convert so we know when to stop with recommandations.
+# param:  runningTotal int - keep tally of items to convertCard so we know when to stop with recommandations.
 # return: total number of items reported on recommended cards. This number
 #         includes copies with holds, items with bills etc.
 sub scanDiscardCards( $$ )
@@ -784,7 +853,7 @@ sub validateCards
 # param:  cardHashRef hash reference - keys: userId, or card's key, values: bitmap of cards condition.
 # param:  totalsHashRef hash reference - of card names keyed by total items converted as value.
 # return: hash reference of userKeys and total converted.
-sub convert( $$ )
+sub convertCards( $$ )
 {
 	my ( $cardsHashRef, $totalsHashRef ) = @_;
 	my $totalItems = 0;
@@ -793,10 +862,29 @@ sub convert( $$ )
 		if ( ( $bitMap & $C_RECOMMEND ) == $C_RECOMMEND )
 		{
 			# output all the valid item keys to file ready for APIServer command.
-			my $converted = selectReportPrepareTransactions( $userKey );
+			my $converted = selectReportPrepareCardTransactions( $userKey );
 			print "CONVERTED: $userKey\n" if ( $opt{'d'} );
 			$totalsHashRef->{ $userKey } = $converted;
 			$totalItems += $converted;
+		}
+	}
+	return $totalItems;
+}
+
+# Selects items for conversion. This means that we look for items
+# from the long-checked-out discard file.
+# param:  cardHashRef hash reference - keys: userId, or card's key, values: bitmap of cards condition. 
+# param:  totalsHashRef hash reference - of card names keyed by total items converted as value.
+# return: hash reference of userKeys and total converted.
+sub convertItems( $$ )
+{
+	my ( $cardsHashRef, $totalsHashRef ) = @_;
+	my $totalItems = selectReportPrepareItemTransactions( $opt{'i'}, $totalsHashRef );
+	if ( $opt{'d'} )
+	{
+		while ( my ( $userKey, $count) = each( %$totalsHashRef ) )
+		{
+			print "CONVERTED $count items from $userKey\n";
 		}
 	}
 	return $totalItems;
@@ -852,7 +940,6 @@ init();
 
 # create a new list if one doesn't exist yet.
 resetDiscardList() if ( not -s $discardsFile );
-
 my $cardHashRef    = validateCards();
 my $convertHashRef = {};
 my $totalItemsSoFar= 0;
@@ -886,21 +973,31 @@ if ( $opt{'c'} )
 	# item keys from another process.
 	unlink( $requestFile ) if ( -s $requestFile );
 	unlink( $tmpFileName ) if ( -s $tmpFileName );
-	# TODO repeat this step for more items if the actual counts are low.
-	while ( $totalItemsSoFar <= $targetDiscardItemCount )
+	# if we are doing item-centric discards start here.
+	if ( $opt{'i'} )
 	{
-		my $converted = convert( $cardHashRef, $convertHashRef );
-		$totalItemsSoFar += $converted;
+		$totalItemsSoFar = convertItems( $cardHashRef, $convertHashRef );
 		updateResults( $convertHashRef );
-		# rescan the list for changes. This will clear the recommended cards provide a recount of converted.
-		$cardsDone = scanDiscardCards( $cardHashRef, $totalItemsSoFar );
-		# stop if we have finished the list or remaining selections are disqualified.
-		last if ( $cardsDone == $totalCards or $converted == 0 );
+	}
+	else # start here for card-centric discards.
+	{
+		while ( $totalItemsSoFar <= $targetDiscardItemCount )
+		{
+			my $converted = convertCards( $cardHashRef, $convertHashRef );
+			$totalItemsSoFar += $converted;
+			updateResults( $convertHashRef );
+			# rescan the list for changes. This will clear the recommended cards provide a recount of converted.
+			$cardsDone = scanDiscardCards( $cardHashRef, $totalItemsSoFar );
+			# stop if we have finished the list or remaining selections are disqualified.
+			last if ( $cardsDone == $totalCards or $converted == 0 );
+		}
 	}
 	# run the apiserver with the commands to convert the discards.
-	`apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
+	# `apiserver -h <$requestFile >>$responseFile` if ( -s $requestFile );
 }
 
 my $report = showReports( $totalItemsSoFar );
 print "$report\n";
 mail( "Discard Report", $opt{'m'}, $report ) if ( $opt{'m'} );
+# remove the list of long-checked-out items so they don't get processed again tomorrow.
+unlink( $opt{'i'} ) if ( $opt{'i'} );
