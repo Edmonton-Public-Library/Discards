@@ -57,7 +57,6 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
-#          3.1 - Added 'discard.deny' handling and improve reporting for reset to include card status.
 #          3.0 - Modified code to use -i to read a list of long-checked-out discard items produced by
 #          'longcheckedout.pl -d"some/path"'.
 #          2.0 - By default gives cards with incorrect profile a convert date so they are skipped. Refactored
@@ -95,7 +94,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.1";
+my $VERSION               = "3.0";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -108,7 +107,7 @@ my $HCPY                  = 0b10000000;
 my $apiReportDISCARDStatus = qq{seluser -p"DISCARD" -oUBDfachb | seluserstatus -iU -oUSj | selascii -iR -oF2F1F3F4F5F6F7F8F9};
 # policy order is important since remove last copy, then remove last copy + holds
 # is not the same as remove last copy + holdsf then remove last copy.
-my @EPLPreservePolicies   = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
+my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
 chomp( my $discardRetentionPeriod  = `transdate -d-90` );
 #chomp( my $discardRetentionPeriod = `transdate -d-0` ); # just for testing.
 my $targetDiscardItemCount= 2000;
@@ -127,7 +126,6 @@ my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the dis
 my $requestFile           = qq{$pwdDir/DISCARD_TXRQ.cmd};
 my $responseFile          = qq{$pwdDir/DISCARD_TXRS.log};
 my $excelFile             = qq{$pwdDir/Discards$today.xls};
-my $denyFile              = qq{$pwdDir/discard.deny};
 
 #
 # Message about this program and how to use it
@@ -137,11 +135,7 @@ sub usage()
     print STDERR << "EOF";
 
 This script determines the recommended DISCARD cards to convert based on
-the user specified max number of items to process - default: 2000. 
-
-If a '$denyFile' files exists in the current directory, item keys in that
-file will not be converted. The file must include just item keys, pipe separated
-and one per line.
+the user specified max number of items to process - default: 2000.
 
 *** WARNING ***
 Over quota cards will stop a new list from being generated because the 
@@ -222,15 +216,9 @@ sub readDiscardCardList
 sub createAPIServerTransactions( $ )
 {
 	my ( $discardHashRef ) = shift;
-	my $discardDenyRef = readTable( $denyFile );
-	# first job: create a file of the item keys we have left on the hash of items to discard.
+	# first job: create a file of the cat keys we have left on the hash ref.
 	my $barCodeFile = "$tmpDir/T_DISCARD_BARC.lst";
-	open( ITEM_KEYS, ">$barCodeFile" ) or die "Error writing to '$barCodeFile': $!\n";
-	for my $key ( keys %$discardHashRef )
-	{
-        print ITEM_KEYS "$key\n" if ( not exists $discardDenyRef->{ $key } );
-    }
-	close( ITEM_KEYS );
+	writeTable( $barCodeFile, $discardHashRef );
 	# second job: get the barcodes.
 	my $barCodes = `cat $barCodeFile | selitem -iK -oBm 2>/dev/null`;
 	unlink( $barCodeFile ); # clean up the temp file.
@@ -374,12 +362,10 @@ sub selectReportPrepareItemTransactions( $$ )
 	my $longCheckedOutDiscardFile = shift;
 	my $convertedCardsHashRef     = shift;
 	# return 555; # Use this to test return bogus results for reports and finished discard file.
-	# instead of getting items from a card you could create a 'long_checkedout_list' of item keys of 
-	# items that have a location of DISCARD and are older than 90 days. We have an app for that.
 	my $discardHashRef = getItemsFromLongCheckedOutList( $longCheckedOutDiscardFile, $convertedCardsHashRef );
 	$discardHashRef    = sortSelectedItems( $discardHashRef );
 	my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
-	my $listSize       = getLongCheckedOutListSize();
+	my $listSize = getLongCheckedOutListSize();
 	print "Total discards to process: $totalDiscards of $listSize items.\n" if ( $opt{'d'} );
 	# move all discarded items to location DISCARD.
 	my $convertCount   = createAPIServerTransactions( $discardHashRef );
