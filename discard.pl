@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.01- Modified reporting of cards reporting catagories counts and card keys.
 #          3.0 - Modified code to use -i to read a list of long-checked-out discard items produced by
 #          'longcheckedout.pl -d"some/path"'.
 #          2.0 - By default gives cards with incorrect profile a convert date so they are skipped. Refactored
@@ -94,7 +95,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.0";
+my $VERSION               = "3.01";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -911,26 +912,23 @@ sub reportStatus( $ )
 {
     my ( $cardHashRef ) = shift;
 	my ( $key, $bitMask);
-	my $cardName = 0;
-	my $convert = 0;
-	my $badName = 0;
-	my $overQuota = 0;
-	my $barred = 0;
-	my $status = "\nCard Status: id|Converted|BadName|OverQuota|Barred|\n\n";
+	# my @convert = ();
+	my @badName = ();
+	my @overQuota = ();
+	my @barred = ();
+	my $status = "\nCard Status:\n------------\n";
 	while ( ( $key, $bitMask ) = each( %$cardHashRef ) )
 	{
-		$convert   = 0;
-		$badName   = 0;
-		$overQuota = 0;
-		$barred    = 0;
-		$cardName  = $key;
-		$bitMask   =  $cardHashRef->{ $key };
-		$convert   = 1 if (( $bitMask & $C_CONVERTED ) == $C_CONVERTED );
-		$badName   = 1 if (( $bitMask & $C_MISNAMED ) == $C_MISNAMED );
-		$overQuota = 1 if (( $bitMask & $C_OVERLOADED ) == $C_OVERLOADED );
-		$barred    = 1 if (( $bitMask & $C_BARRED ) == $C_BARRED );
-		$status .= $cardName."\|".$convert."\|".$badName."\|".$overQuota."\|".$barred."\|\n";
+		$bitMask = $cardHashRef->{ $key };
+		# push( @convert, $key ) if (( $bitMask & $C_CONVERTED ) == $C_CONVERTED );
+		push( @badName, $key ) if (( $bitMask & $C_MISNAMED ) == $C_MISNAMED );
+		push( @overQuota, $key ) if (( $bitMask & $C_OVERLOADED ) == $C_OVERLOADED );
+		push( @barred, $key ) if (( $bitMask & $C_BARRED ) == $C_BARRED );
 	}
+	# $status .= "converted: ".scalar( @convert )."\n@convert\n\n";
+	$status .= "bad card: ".scalar( @badName )."\n@badName\n\n";
+	$status .= "over quota: ".scalar( @overQuota )."\n@overQuota\n\n";
+	$status .= "barred: ".scalar( @barred )."\n@barred\n\n";
 	return $status;
 }
 
