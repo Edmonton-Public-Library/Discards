@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.02- Improved the LAST COPY search so that it works for Last copy of a title; before it was per callnum.
 #          3.01- Modified reporting of cards reporting catagories counts and card keys.
 #          3.0 - Modified code to use -i to read a list of long-checked-out discard items produced by
 #          'longcheckedout.pl -d"some/path"'.
@@ -95,7 +96,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.01";
+my $VERSION               = "3.02";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -493,10 +494,11 @@ sub markItems( $$ )
 	# are the Titles with less than 2 copies. head -1 DISCARD_LCHT.lst | selcallnum    -iC -c"<2"     -oC | sort | uniq -c
 	# produces:    8 1016142|
 	# We don't need this one because the title has 8 copies.
-	# cat DISCARD_LCHT.lst | selcallnum    -iC -c"<2"     -oC | sort | uniq -c | awk '{if ( $1 == "1" )print $2;}'
+	# cat DISCARD_LCHT.lst | selcatalog -iC -n"<2" -oCS | selcallnum  -iN -c"<2" -oNS
 	# prints out the cat key we could use that to do a lookup for items keys that start with that catalog key.
-	# But even that will give you on order copies, we need to take the ones above that have count 0 then selcataloge
-	if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcallnum    -iN -c"<2"     -oNS 2>/dev/null`; }
+	# But even that will give you on order copies, we need to take the ones above that have count 0 then selcatalog
+	# if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcallnum    -iN -c"<2"     -oNS 2>/dev/null`; }
+	if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcatalog -iC -n"<2" -oCS | selcallnum  -iN -c"<2" -oNS 2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_BILLS" )          { $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_ORDERS" )         { $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }

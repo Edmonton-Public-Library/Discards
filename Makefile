@@ -5,10 +5,7 @@ USER=sirsi
 REMOTE=~/Unicorn/EPLwork/anisbet/
 LOCAL=~/projects/discards/
 APP=discard.pl
-API=discard_API.pl
 
-api: test_api
-	scp ${LOCAL}${API} ${USER}@${SERVER}:${REMOTE}
 put: test
 	scp ${LOCAL}${APP} ${USER}@${SERVER}:${REMOTE}
 test:
