@@ -57,6 +57,8 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.03- Improve maintenance of finished_discard.txt file. This file will take the existing convert count and add
+#          to it, then save it back.
 #          3.02- Improved the LAST COPY search so that it works for Last copy of a title; before it was per callnum.
 #          3.01- Modified reporting of cards reporting catagories counts and card keys.
 #          3.0 - Modified code to use -i to read a list of long-checked-out discard items produced by
@@ -96,7 +98,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.02";
+my $VERSION               = "3.03";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -586,8 +588,8 @@ sub updateResults( $ )
 		my ($id, $userKey, $description, $dateCreated, $dateUsed, $itemCount, $holds, $bills, $status, $dateConverted, $converted) = split('\|', $_);
 		if ( exists $convertedCardsHashRef->{ $userKey } ) # value may be '0' but must be defined.
 		{
-			$dateConverted = $today;
-			$converted     = $convertedCardsHashRef->{ $userKey };
+			$dateConverted  = $today;
+			$converted     += $convertedCardsHashRef->{ $userKey };
 		}
 		# reconstitute the record for writing to file
 		my $record = "$id|$userKey|$description|$dateCreated|$dateUsed|$itemCount|$holds|$bills|$status|$dateConverted|$converted|";
