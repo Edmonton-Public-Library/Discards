@@ -1,8 +1,13 @@
-~~~~~~~~~~
-This directory contains the scripts currently used for discards.
-The discard.pl recommends and will eventually perform the discard
-process, the discard_reports.pl will report what was converted 
-and update the finished_discards.txt file.
+January 31, 2013
+This script is the engine for the discard process. There are several documents that give more detail
+on the ILSWIKI, how ever there are two basic ways of running discard.pl.
+1) Stand-alone - in which items are optionally converted in a card-centric fashion.
+2) Optimized - in which a list of items are fed into discard.pl script; all are checked for basic 
+   discardability, but if there are no bills, holds, serials, or on-order then they will be converted.
 
-The discard process will not work on any other machine than:
-eplapp.library.ualberta.ca
+The machinery that creates the initial list is called the longcheckedout.pl script. I know, it's a 
+bad name but it quickly pulls together a list of items that are 90 days old or older, and creates
+a list that discard.pl can read. The two processes are segregated because longcheckedout.pl is used for other purposes.
+
+Cron runs a shell script called discard.sh which creates the 90 day discard list and then feeds
+it to discard.pl.
