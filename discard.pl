@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.04- Overwrite existing exception files.
 #          3.03- Improve maintenance of finished_discard.txt file. This file will take the existing convert count and add
 #          to it, then save it back.
 #          3.02- Improved the LAST COPY search so that it works for Last copy of a title; before it was per callnum.
@@ -88,7 +89,7 @@ use warnings;
 use vars qw/ %opt /;
 use Getopt::Std;
 use POSIX qw/ceil/;
-use epl; # for readTable and writeTable.
+
 # See Unicorn/Bin/mailfile.pl <subject> <file> <recipients> for correct mailing procedure.
 # Environment setup required by cron to run script because its daemon runs
 # without assuming any environment settings and we need to use sirsi's.
@@ -98,7 +99,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.03";
+my $VERSION               = "3.04";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -176,6 +177,23 @@ Version: $VERSION
 
 EOF
     exit;
+}
+
+# Writes the contents of a hash reference to file. Values are not stored.
+# param:  file name string - path of file to write to.
+# param:  table hash reference - data to write to file (keys only).
+# return: the number of items written to file.
+sub writeTable($$)
+{
+	my $fileName = shift;
+	my $table    = shift;
+	open TABLE, ">$fileName" or die "**Error: discard serialization error writing '$fileName' $!\n";
+	for my $key ( keys %$table )
+	{
+		print TABLE "$key\n";
+	}
+	close TABLE;
+	return scalar keys %$table;
 }
 
 # Writes the finished Discard card list to file.
@@ -439,25 +457,12 @@ $key,   $value
 	foreach my $policy ( @policies )
 	{
 		my $prevCards = {};
-		if    ( $policy == $LCPY )            { $prevCards = readTable( "$pwdDir/DISCARD_LCPY.lst" ); } # last copy
-		elsif ( $policy == $BILL )            { $prevCards = readTable( "$pwdDir/DISCARD_BILL.lst" ); } # bills
-		elsif ( $policy == $ORDR )            { $prevCards = readTable( "$pwdDir/DISCARD_ORDR.lst" ); } # items on order
-		elsif ( $policy == $SCTL )            { $prevCards = readTable( "$pwdDir/DISCARD_SCTL.lst" ); } # serials
-		elsif ( $policy == ( $HTIT | $LCPY ) ){ $prevCards = readTable( "$pwdDir/DISCARD_LCHT.lst" ); } # last copy with holds
-		elsif ( $policy == $HCPY )            { $prevCards = readTable( "$pwdDir/DISCARD_HCPY.lst" ); } # copy holds
-		else  { print "unknown '$policy'\n"; }
 		while ( my ($key, $value) = each( %$discardHashRef ) )
 		{
 			if ( ( $policy & $value ) == $policy )
 			{
 				# print OUT "$key\n";
 				$prevCards->{ $key } = 1;
-				# remove the item from the list of discards since the policy matches a 'keep' policy.
-				# -------------------------
-				# revisit this. Chris thinks we can move all items to DISCARD since the remove report will 
-				# also filter before it does its remove. The up-shot is that all the items will be moved off
-				# the discard card and locatable by DISCARD location.
-				# delete( $discardHashRef->{ $key } );
 			}
 		}
 		if    ( $policy == $LCPY )            { writeTable( "$pwdDir/DISCARD_LCPY.lst", $prevCards ); }
@@ -467,6 +472,15 @@ $key,   $value
 		elsif ( $policy == ( $HTIT | $LCPY ) ){ writeTable( "$pwdDir/DISCARD_LCHT.lst", $prevCards ); }
 		elsif ( $policy == $HCPY )            { writeTable( "$pwdDir/DISCARD_HCPY.lst", $prevCards ); }
 	}
+	# And write to one big file with the additional policy flags attached.
+	my $flaggedCards = {};
+	while ( my ($key, $value) = each( %$discardHashRef ) )
+	{
+		my $newKey = "$key$value|";
+		print "$newKey\n";
+		$flaggedCards->{ $newKey } = 1;
+	}
+	writeTable( "$pwdDir/DISCARD_COMP.lst", $flaggedCards );
 	return scalar( keys( %$discardHashRef ) );
 }
 
