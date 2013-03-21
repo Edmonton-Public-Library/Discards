@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.1 - Removes item keys listed in the deny list just before conversion '-y' is invoked. See usage.
 #          3.04- Overwrite existing exception files.
 #          3.03- Improve maintenance of finished_discard.txt file. This file will take the existing convert count and add
 #          to it, then save it back.
@@ -99,7 +100,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.04";
+my $VERSION               = "3.1";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -158,7 +159,7 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path]
  -d        : turn on debugging output.
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
- -i path   : process items from a long-checked-out discard list. Updates $discardsFile then exits.
+ -i path   : process items from an 'allow' list. See -y for 'deny' list processing.
  -m "addrs": mail output to provided address(es).
  -M        : reports cards that are incorrectly identified with DISCARD profile.
  -n number : sets the upper limit of the number of discards to process.
@@ -170,9 +171,16 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path]
  -R        : reports cards that are recommended for conversion.
  -t cardKey: convert the card with this key.
  -x        : this (help) message
+ -y path   : deny list of item keys. Stops these item keys from being converted.
+             Has no effect without '-c', or if the specified list is missing, empty
+			 or contains no item keys that match those selected for conversion.
+             Items on this list always trump items on an 'allow' list, that is,
+			 if an item shows up on the allow and deny list the item will NOT be
+			 converted. Deny has no effect on reporting.
 
 example: $0 -ecq -n 1500 -m anisbet\@epl.ca -b MNA
 example: $0 -n 2500 -m anisbet\@epl.ca -i"./LCOdiscard.lst"
+example: $0 -n 2500 -m anisbet\@epl.ca -i"./item_keys_to_discard.lst" -y"./some_item_keys_to_keep.lst"
 Version: $VERSION
 
 EOF
@@ -231,6 +239,31 @@ sub readDiscardCardList
 	return sort( @cards );
 }
 
+# Removes keys of items on the deny list (if any).
+# param:  hash reference of discarded cat keys.
+# return: 
+sub removeDenyItemKeys( $ )
+{
+	my $discardHashRef = shift;
+	if ( -e $opt{'y'} and ! -z $opt{'y'} ) # file exists and is not zero in size.
+	{
+		open( DENY_KEYS, "<$opt{'y'}" ) or die "Couldn't read $opt{'y'} $!\n";
+		my $table;
+		while ( <DENY_KEYS> )
+		{
+			chomp;
+			$table->{ $_ } = 1;
+		}
+		close( DENY_KEYS );
+		for my $key ( keys %$table )
+		{
+			delete( $discardHashRef->{$key} );
+			print STDERR "'-y' - removing item key '$key' from conversion process.\n" if ( $opt{'d'} );
+		}
+	}
+	return;
+}
+
 # Creates entries that will move all items to location DISCARD via 
 # a API server transaction file.
 # param:  hash reference of discarded cat keys.
@@ -238,7 +271,9 @@ sub readDiscardCardList
 sub createAPIServerTransactions( $ )
 {
 	my ( $discardHashRef ) = shift;
-	# first job: create a file of the cat keys we have left on the hash ref.
+	# first job: if '-y' is selected remove these items.
+	removeDenyItemKeys( $discardHashRef ) if ( $opt{'y'} );
+	# next create a file of the cat keys we have left on the hash ref.
 	my $barCodeFile = "$tmpDir/T_DISCARD_BARC.lst";
 	writeTable( $barCodeFile, $discardHashRef );
 	# second job: get the barcodes.
@@ -635,7 +670,7 @@ sub resetDiscardList
 # return:
 sub init()
 {
-    my $opt_string = 'b:Bcdei:m:Mn:oQrRt:x';
+    my $opt_string = 'b:Bcdei:m:Mn:oQrRt:xy:';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{'x'});                            # User needs help
     $targetDiscardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
