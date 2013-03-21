@@ -173,11 +173,12 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path]
  -x        : this (help) message
  -y path   : deny list of item keys. Stops these item keys from being converted.
              Has no effect without '-c', or if the specified list is missing, empty
-			 or contains no item keys that match those selected for conversion.
+             or contains no item keys that match those selected for conversion.
              Items on this list always trump items on an 'allow' list, that is,
-			 if an item shows up on the allow and deny list the item will NOT be
-			 converted. Deny has no effect on reporting.
-
+             if an item shows up on the allow and deny list the item will NOT be
+             converted. Deny has no effect on reporting. Deny files are just item
+             keys - one per line. The file can be named anything.
+			 
 example: $0 -ecq -n 1500 -m anisbet\@epl.ca -b MNA
 example: $0 -n 2500 -m anisbet\@epl.ca -i"./LCOdiscard.lst"
 example: $0 -n 2500 -m anisbet\@epl.ca -i"./item_keys_to_discard.lst" -y"./some_item_keys_to_keep.lst"
