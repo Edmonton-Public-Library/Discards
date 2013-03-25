@@ -1,3 +1,6 @@
+March 25, 2013
+Script now contains -y that will deny cat, callnum or item keys from conversion.
+
 January 31, 2013
 This script is the engine for the discard process. There are several documents that give more detail
 on the ILSWIKI, how ever there are two basic ways of running discard.pl.
