@@ -246,20 +246,51 @@ sub readDiscardCardList
 sub removeDenyItemKeys( $ )
 {
 	my $discardHashRef = shift;
-	if ( -e $opt{'y'} and ! -z $opt{'y'} ) # file exists and is not zero in size.
+	print STDERR "'-y' set.\n" if ( $opt{'d'} );
+	if ( -e $opt{'y'} ) # file exists.
 	{
+		print STDERR "$opt{'y'} file is valid.\n" if ( $opt{'d'} );
 		open( DENY_KEYS, "<$opt{'y'}" ) or die "Couldn't read $opt{'y'} $!\n";
-		my $table;
+		my $denyTable;
 		while ( <DENY_KEYS> )
 		{
 			chomp;
-			$table->{ $_ } = 1;
+			$denyTable->{ $_ } = 1;
 		}
 		close( DENY_KEYS );
-		for my $key ( keys %$table )
+		for my $denyLine ( keys %$denyTable )
 		{
-			delete( $discardHashRef->{$key} );
-			print STDERR "'-y' - removing item key '$key' from conversion process.\n" if ( $opt{'d'} );
+			# On a discard list the item keys look like this:
+			# "338579|29|1|201212211414|SPW-DISCARD2|DISCARD|EPLSPW|417|0|0|625144|BARRED|"
+			# but the item key is at the beginning so check the keys if they start with the deny item keys
+			print STDERR "DENY_KEY '$denyLine'\n" if ( $opt{'d'} );
+			my @fields  = split( '\|', $denyLine ); # during testing we were using part of the allow list so just get the item keys.
+			my $denyKey = "";  
+			if ( exists $fields[0] and exists $fields[1] and exists $fields[2] )
+			{
+				# joining will put a literal '\|' which you need for matching or regex engine sees it as '|' separated expressions.
+				$denyKey = join( '\|', $fields[0], $fields[1], $fields[2] ); # match if the item key is specified along with anything else.
+			}
+			elsif ( exists $fields[0] and exists $fields[1] )
+			{
+				$denyKey = join( '\|', $fields[0], $fields[1] ); # match if the call num is given
+			}
+			elsif ( exists $fields[0] )
+			{
+				$denyKey = $fields[0]; # match if only the cat key is given
+			}
+			if ( $denyKey eq "" )
+			{
+				next; # empty line, or no value set for deny key but if you don't skip '' **will match** any line.
+			}
+			for my $allowItemKey ( keys %$discardHashRef ) 
+			{
+				if ( $allowItemKey =~ m/^($denyKey)/ )
+				{
+					delete( $discardHashRef->{$allowItemKey} );
+					print STDERR "REMOVE MATCH: '$allowItemKey' and '$denyKey'\n" if ( $opt{'d'} );
+				}
+			}
 		}
 	}
 	return;
