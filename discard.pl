@@ -57,6 +57,8 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.15 - Expands selection of last copy to a super set of all discard items whose siblings are also in 
+#          any of the inaccessible locations of DAMAGE, LOST, LOST-ASSUM, and LOST-CLAIM.
 #          3.1 - Removes item keys listed in the deny list just before conversion '-y' is invoked. See usage.
 #          3.04- Overwrite existing exception files.
 #          3.03- Improve maintenance of finished_discard.txt file. This file will take the existing convert count and add
@@ -100,7 +102,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.1";
+my $VERSION               = "3.15";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -132,6 +134,7 @@ my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the dis
 my $requestFile           = qq{$pwdDir/DISCARD_TXRQ.cmd};
 my $responseFile          = qq{$pwdDir/DISCARD_TXRS.log};
 my $excelFile             = qq{$pwdDir/Discards$today.xls};
+my @NON_VIABLE_LOCATIONS  = qw( DISCARD );
 
 #
 # Message about this program and how to use it
@@ -160,6 +163,7 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path]
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
  -i path   : process items from an 'allow' list. See -y for 'deny' list processing.
+ -l "LOC0,LOC1": Locations where items are considered non-viable. DISCARD is the default.
  -m "addrs": mail output to provided address(es).
  -M        : reports cards that are incorrectly identified with DISCARD profile.
  -n number : sets the upper limit of the number of discards to process.
@@ -182,6 +186,7 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path]
 example: $0 -ecq -n 1500 -m anisbet\@epl.ca -b MNA
 example: $0 -n 2500 -m anisbet\@epl.ca -i"./LCOdiscard.lst"
 example: $0 -n 2500 -m anisbet\@epl.ca -i"./item_keys_to_discard.lst" -y"./some_item_keys_to_keep.lst"
+example: $0 -i"./item_keys_to_discard.lst" -y"./some_item_keys_to_keep.lst" -l"DAMAGE,LOST,LOST-ASSUM,LOST-CLAIM".
 Version: $VERSION
 
 EOF
@@ -454,7 +459,7 @@ sub selectReportPrepareItemTransactions( $$ )
 	my $discardHashRef = getItemsFromLongCheckedOutList( $longCheckedOutDiscardFile, $convertedCardsHashRef );
 	$discardHashRef    = sortSelectedItems( $discardHashRef );
 	my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
-	my $listSize = getLongCheckedOutListSize();
+	my $listSize       = getLongCheckedOutListSize();
 	print "Total discards to process: $totalDiscards of $listSize items.\n" if ( $opt{'d'} );
 	# move all discarded items to location DISCARD.
 	my $convertCount   = createAPIServerTransactions( $discardHashRef );
@@ -551,6 +556,103 @@ $key,   $value
 	return scalar( keys( %$discardHashRef ) );
 }
 
+# Reads the contents of a file into a hash reference.
+# param:  file name string - path of file to write to.
+# return: hash reference - table data.
+sub readTable( $ )
+{
+	my ( $fileName ) = shift;
+	my ( $table )    = {};
+	if ( -e $fileName )
+	{
+		open TABLE, "<$fileName" or die "readTable Serialization error reading '$fileName' $!\n";
+		while ( <TABLE> )
+		{
+			chomp;
+			$table->{ $_ } = 1;
+		}
+		close TABLE;
+	}
+	return $table;
+}
+
+# This function finds all the siblings of the argument item key, 
+# that are mutually inaccessible, that is, a family of items that
+# are all in inaccessible locations of DAMAGE, LOST, LOST-ASSUM, 
+# or LOST-CLAIM.
+# param:  file of item keys. 
+# params: all other params are the list of non-viable locations.
+#         DISCARD,DAMAGE,LOST,LOST-ASSUM, and LOST-CLAIM
+# return: a string of item keys separated by a '\n'.
+sub findNonViableTitles
+{
+	my $fileName = shift;
+	# It will be faster to look up non viable locations if we put them in a hash.
+	# Non-viable lookup time drops to O(1).
+	my %nonViableLocations      = map { $_ => 1 } @_;
+	my $nonViableItemKeyString  = "";  # Contains the entire list of item keys that are not viable.
+	my $viableLocationCount     = 0;   # count of viable locations for the current title.
+	my $lastCatKey              = 0;   # Item key of the last iteration.
+	my $lastSequenceNumber      = 0;   # Call sequence of ...
+	my $lastCopyNumber          = 0;   # Last copy number of ...
+	my $originalItemKeys        = readTable( $fileName );
+	my $viableCatKeys           = {};
+	my $result                  = `cat "$fileName" | selitem -iC -oIm 2>/dev/null`;
+	my @entireList              = split( '\n', $result );
+	for my $line ( @entireList )
+	{
+		my ( $catKey, $seqNumber, $itemNumber, $loc ) = split( '\|', $line );
+		if ( $lastCatKey != $catKey && $lastCatKey != 0 )
+		{
+			if ( $viableLocationCount == 0 )
+			{
+				print "NON-VIABLE: $lastCatKey|$lastSequenceNumber|$lastCopyNumber|\n" if ( $opt{ 'D' });
+			}
+			else
+			{
+				print "VIABLE: $lastCatKey|$lastSequenceNumber|$lastCopyNumber|\n" if ( $opt{ 'D' });
+				$viableCatKeys->{ $lastCatKey } = 1;
+			}
+			$viableLocationCount = 0;
+		}
+		$lastCatKey         = $catKey;
+		$lastSequenceNumber = $seqNumber;
+		$lastCopyNumber     = $itemNumber;
+		# if the item's current location is not in the non-viable location list then it 
+		# must be in a viable location, and there for there must be at least one viable copy 
+		# left in the catalogue.
+		if( ! exists( $nonViableLocations{ $loc } ) )
+		{
+			$viableLocationCount += 1;
+		}
+	}
+	# do the last iteration
+	if ( $lastCatKey != 0 && $viableLocationCount == 0 )
+	{
+		print "NON-VIABLE: $lastCatKey|$lastSequenceNumber|$lastCopyNumber|\n" if ( $opt{ 'D' });
+	}
+	else
+	{
+		print "VIABLE: $lastCatKey|$lastSequenceNumber|$lastCopyNumber|\n" if ( $opt{ 'D' });
+		$viableCatKeys->{ $lastCatKey } = 1;
+	}
+	# Now clean out viable item keys from the original list of discarded item keys.
+	while ( my ( $oKey, $oValue ) = each ( %$originalItemKeys ) )
+	{
+		my ( $ck, $sn, $cn ) = split( '\|', $oKey );
+		if ( defined $viableCatKeys->{ $ck } )
+		{
+			delete $originalItemKeys->{ $oKey };
+		}
+	}
+	# create a result set.
+	while ( my ( $key, $value ) = each( %$originalItemKeys ) ) 
+	{
+		$nonViableItemKeyString .= "$key\n";
+	}
+	return $nonViableItemKeyString;
+}
+
 # Marks items that are not to be discarded. Any value that is greater than 0 will be preserved.
 # Values are bit ordered so the reason of the disqualification can be tested.
 # 1  = good to DISCARD
@@ -570,8 +672,6 @@ sub markItems( $$ )
 {
 	my ( $keyWord, $discardHashRef ) = @_;
 	my $results  = "";
-	# while this code looks amature-ish it is clearer and has no negative spacial or temporal impact on the script.
-	########## TODO ##########
 	# This next line is naive. It returns call nums that have less than 2 copies for a callnum!
 	# A title can have several call numbers. Some on order with copies less than two copies, but we really need 
 	# are the Titles with less than 2 copies. head -1 DISCARD_LCHT.lst | selcallnum    -iC -c"<2"     -oC | sort | uniq -c
@@ -581,7 +681,10 @@ sub markItems( $$ )
 	# prints out the cat key we could use that to do a lookup for items keys that start with that catalog key.
 	# But even that will give you on order copies, we need to take the ones above that have count 0 then selcatalog
 	# if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcallnum    -iN -c"<2"     -oNS 2>/dev/null`; }
-	if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcatalog -iC -n"<2" -oCS | selcallnum  -iN -c"<2" -oNS 2>/dev/null`; }
+	# This line finds all of the literally last items on a title. This works but we need something that finds last VIABLE item on a title.
+	# if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcatalog -iC -n"<2" -oCS | selcallnum  -iN -c"<2" -oNS 2>/dev/null`; }
+	# This computes the last Viable item of a title.
+	if    ( $keyWord eq "LAST_COPY" )           { $results = findNonViableTitles( $tmpFileName, @NON_VIABLE_LOCATIONS ); }
 	elsif ( $keyWord eq "WITH_BILLS" )          { $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_ORDERS" )         { $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }
@@ -702,7 +805,7 @@ sub resetDiscardList
 # return:
 sub init()
 {
-    my $opt_string = 'b:Bcdei:m:Mn:oQrRt:xy:';
+    my $opt_string = 'b:Bcdei:l:m:Mn:oQrRt:xy:';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{'x'});                            # User needs help
     $targetDiscardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
@@ -764,6 +867,20 @@ sub init()
 		my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 		print "Total DISCARD location total: $totalDiscards.\n";
 		exit( 0 );
+	}
+	# Non-viable locations are set here.
+	if ( $opt{ 'l' } )
+	{
+		# looks like:
+		# -l"DAMAGE,LOST,LOST-ASSUM,LOST-CLAIM".
+		# needs to be made into:
+		# my @NON_VIABLE_LOCATIONS  = ( "DISCARD", "DAMAGE", "LOST", "LOST-ASSUM", "LOST-CLAIM" );
+		my @additionalLocations = split( ',', $opt{ 'l' } );
+		foreach my $loc ( @additionalLocations )
+		{
+			push( @NON_VIABLE_LOCATIONS, $loc );
+		}
+		print "@NON_VIABLE_LOCATIONS\n"
 	}
 }
 
