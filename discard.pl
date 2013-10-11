@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.16 - Bug fix for incomplete selection of last viable copy. 
 #          3.15 - Expands selection of last copy to a super set of all discard items whose siblings are also in 
 #          any of the inaccessible locations of DAMAGE, LOST, LOST-ASSUM, and LOST-CLAIM.
 #          3.1 - Removes item keys listed in the deny list just before conversion '-y' is invoked. See usage.
@@ -102,7 +103,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.15";
+my $VERSION               = "3.16";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -589,67 +590,68 @@ sub findNonViableTitles
 	my $fileName = shift;
 	# It will be faster to look up non viable locations if we put them in a hash.
 	# Non-viable lookup time drops to O(1).
-	my %nonViableLocations      = map { $_ => 1 } @_;
+	my %nonViableLocations = map { $_ => 1 } @_;
 	my $nonViableItemKeyString  = "";  # Contains the entire list of item keys that are not viable.
 	my $viableLocationCount     = 0;   # count of viable locations for the current title.
-	my $lastCatKey              = 0;   # Item key of the last iteration.
+	my $lastCKey                = 0;   # Item key of the last iteration.
 	my $lastSequenceNumber      = 0;   # Call sequence of ...
 	my $lastCopyNumber          = 0;   # Last copy number of ...
-	my $originalItemKeys        = readTable( $fileName );
-	my $viableCatKeys           = {};
-	my $result                  = `cat "$fileName" | selitem -iC -oIm 2>/dev/null`;
-	my @entireList              = split( '\n', $result );
-	for my $line ( @entireList )
+	my @potentialNonViableKeys  = ();
+	my @forsureNonViableKeys    = ();
+	my $result = `cat "$fileName" | selitem -iC -oCmI 2>/dev/null`;
+	my @entireList = split( '\n', $result );
+	for my $line  ( sort( @entireList ) )
 	{
-		my ( $catKey, $seqNumber, $itemNumber, $loc ) = split( '\|', $line );
-		if ( $lastCatKey != $catKey && $lastCatKey != 0 )
+		my ( $cKey, $loc, $catKey, $seqNumber, $itemNumber ) = split( '\|', $line );
+		if ( $lastCKey != $cKey && $lastCKey != 0 )
 		{
 			if ( $viableLocationCount == 0 )
 			{
-				print "NON-VIABLE: $lastCatKey|$lastSequenceNumber|$lastCopyNumber|\n" if ( $opt{ 'D' });
-			}
-			else
-			{
-				print "VIABLE: $lastCatKey|$lastSequenceNumber|$lastCopyNumber|\n" if ( $opt{ 'D' });
-				$viableCatKeys->{ $lastCatKey } = 1;
+				for my $nonViableRecord ( @potentialNonViableKeys )
+				{
+					print "NON-VIABLE: $nonViableRecord" if ( $opt{ 'D' });
+					push( @forsureNonViableKeys, $nonViableRecord );
+				}
 			}
 			$viableLocationCount = 0;
+			undef @potentialNonViableKeys;
+			@potentialNonViableKeys = ();
 		}
-		$lastCatKey         = $catKey;
+		$lastCKey           = $catKey;
 		$lastSequenceNumber = $seqNumber;
 		$lastCopyNumber     = $itemNumber;
 		# if the item's current location is not in the non-viable location list then it 
 		# must be in a viable location, and there for there must be at least one viable copy 
 		# left in the catalogue.
-		if( ! exists( $nonViableLocations{ $loc } ) )
+		if( exists( $nonViableLocations{ $loc } ) )
+		{
+			# save the item key for potentially return list.
+			if ( $loc eq "DISCARD" ) # only save the discard keys.
+			{
+				push( @potentialNonViableKeys, "$lastCKey|$lastSequenceNumber|$lastCopyNumber|\n" );
+			}
+		}
+		else
 		{
 			$viableLocationCount += 1;
 		}
 	}
 	# do the last iteration
-	if ( $lastCatKey != 0 && $viableLocationCount == 0 )
+	if ( $viableLocationCount == 0 )
 	{
-		print "NON-VIABLE: $lastCatKey|$lastSequenceNumber|$lastCopyNumber|\n" if ( $opt{ 'D' });
-	}
-	else
-	{
-		print "VIABLE: $lastCatKey|$lastSequenceNumber|$lastCopyNumber|\n" if ( $opt{ 'D' });
-		$viableCatKeys->{ $lastCatKey } = 1;
-	}
-	# Now clean out viable item keys from the original list of discarded item keys.
-	while ( my ( $oKey, $oValue ) = each ( %$originalItemKeys ) )
-	{
-		my ( $ck, $sn, $cn ) = split( '\|', $oKey );
-		if ( defined $viableCatKeys->{ $ck } )
+		for my $nonViableRecord ( @potentialNonViableKeys )
 		{
-			delete $originalItemKeys->{ $oKey };
+			print "NON-VIABLE: $nonViableRecord" if ( $opt{ 'D' });
+			push( @forsureNonViableKeys, $nonViableRecord );
 		}
 	}
+	undef @potentialNonViableKeys;
 	# create a result set.
-	while ( my ( $key, $value ) = each( %$originalItemKeys ) ) 
+	for  my $key ( @forsureNonViableKeys ) 
 	{
-		$nonViableItemKeyString .= "$key\n";
+		$nonViableItemKeyString .= "$key";
 	}
+	undef @forsureNonViableKeys;
 	return $nonViableItemKeyString;
 }
 
