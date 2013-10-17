@@ -57,6 +57,8 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.17.01 - Merged code from test bench discardlastcopy.pl. 
+#          3.17 - Bug fix for incorrect recording of discard types per file. 
 #          3.16 - Bug fix for incomplete selection of last viable copy. 
 #          3.15 - Expands selection of last copy to a super set of all discard items whose siblings are also in 
 #          any of the inaccessible locations of DAMAGE, LOST, LOST-ASSUM, and LOST-CLAIM.
@@ -103,7 +105,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.16";
+my $VERSION               = "3.17.02";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -116,7 +118,7 @@ my $HCPY                  = 0b10000000;
 my $apiReportDISCARDStatus = qq{seluser -p"DISCARD" -oUBDfachb | seluserstatus -iU -oUSj | selascii -iR -oF2F1F3F4F5F6F7F8F9};
 # policy order is important since remove last copy, then remove last copy + holds
 # is not the same as remove last copy + holdsf then remove last copy.
-my @EPLPreservePolicies = ( ( $HTIT | $LCPY ), $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
+my @EPLPreservePolicies = ( $HTIT, $LCPY, $BILL, $ORDR, $SCTL, $HCPY );
 chomp( my $discardRetentionPeriod  = `transdate -d-90` );
 #chomp( my $discardRetentionPeriod = `transdate -d-0` ); # just for testing.
 my $targetDiscardItemCount= 2000;
@@ -198,7 +200,7 @@ EOF
 # param:  file name string - path of file to write to.
 # param:  table hash reference - data to write to file (keys only).
 # return: the number of items written to file.
-sub writeTable($$)
+sub writeTable( $$ )
 {
 	my $fileName = shift;
 	my $table    = shift;
@@ -512,48 +514,34 @@ sub sortSelectedItems( $ )
 sub reportAppliedPolicies
 {
 	my ( $discardHashRef, @policies ) = @_;
-	if ( $opt{'d'} )
-	{
-		my ( $key, $value );
-		format FORM = 
-@<<<<<<<<<<<<< @##
-$key,   $value
-.
-		$~ = "FORM";
-		while ( ($key, $value) = each( %$discardHashRef ) )
-		{
-			write;
-		}
-		$~ = "STDOUT";
-	}
-	
 	foreach my $policy ( @policies )
 	{
-		my $prevCards = {};
-		while ( my ($key, $value) = each( %$discardHashRef ) )
+		my $itemsThatMatchThisPolicy = {};
+		while ( my ( $key, $v ) = each( %$discardHashRef ) )
 		{
-			if ( ( $policy & $value ) == $policy )
+			if ( ( $v & $policy ) == $policy )
 			{
-				# print OUT "$key\n";
-				$prevCards->{ $key } = 1;
+				$itemsThatMatchThisPolicy->{ $key } = 1;
 			}
 		}
-		if    ( $policy == $LCPY )            { writeTable( "$pwdDir/DISCARD_LCPY.lst", $prevCards ); }
-		elsif ( $policy == $BILL )            { writeTable( "$pwdDir/DISCARD_BILL.lst", $prevCards ); }
-		elsif ( $policy == $ORDR )            { writeTable( "$pwdDir/DISCARD_ORDR.lst", $prevCards ); }
-		elsif ( $policy == $SCTL )            { writeTable( "$pwdDir/DISCARD_SCTL.lst", $prevCards ); }
-		elsif ( $policy == ( $HTIT | $LCPY ) ){ writeTable( "$pwdDir/DISCARD_LCHT.lst", $prevCards ); }
-		elsif ( $policy == $HCPY )            { writeTable( "$pwdDir/DISCARD_HCPY.lst", $prevCards ); }
+		if    ( $policy == $LCPY ) { writeTable( "$pwdDir/DISCARD_LCPY.lst", $itemsThatMatchThisPolicy ); }
+		elsif ( $policy == $BILL ) { writeTable( "$pwdDir/DISCARD_BILL.lst", $itemsThatMatchThisPolicy ); }
+		elsif ( $policy == $ORDR ) { writeTable( "$pwdDir/DISCARD_ORDR.lst", $itemsThatMatchThisPolicy ); }
+		elsif ( $policy == $SCTL ) { writeTable( "$pwdDir/DISCARD_SCTL.lst", $itemsThatMatchThisPolicy ); }
+		elsif ( $policy == $HTIT ) { writeTable( "$pwdDir/DISCARD_HOLD.lst", $itemsThatMatchThisPolicy ); }
+		elsif ( $policy == $HCPY ) { writeTable( "$pwdDir/DISCARD_HCPY.lst", $itemsThatMatchThisPolicy ); }
+		for (keys %$itemsThatMatchThisPolicy)
+		{
+			delete $itemsThatMatchThisPolicy->{ $_ };
+		}
 	}
 	# And write to one big file with the additional policy flags attached.
 	my $flaggedCards = {};
-	while ( my ($key, $value) = each( %$discardHashRef ) )
+	while ( my ($key, $v) = each( %$discardHashRef ) )
 	{
-		my $newKey = "$key$value|";
-		print "$newKey\n";
-		$flaggedCards->{ $newKey } = 1;
+		$flaggedCards->{ "$key$v|" } = 1;
 	}
-	writeTable( "$pwdDir/DISCARD_COMP.lst", $flaggedCards );
+	writeTable( "DISCARD_COMP.lst", $flaggedCards );
 	return scalar( keys( %$discardHashRef ) );
 }
 
@@ -590,14 +578,14 @@ sub findNonViableTitles
 	my $fileName = shift;
 	# It will be faster to look up non viable locations if we put them in a hash.
 	# Non-viable lookup time drops to O(1).
-	my %nonViableLocations = map { $_ => 1 } @_;
+	my %nonViableLocations      = map { $_ => 1 } @_;
 	my $nonViableItemKeyString  = "";  # Contains the entire list of item keys that are not viable.
 	my $viableLocationCount     = 0;   # count of viable locations for the current title.
 	my $lastCKey                = 0;   # Item key of the last iteration.
 	my $lastSequenceNumber      = 0;   # Call sequence of ...
 	my $lastCopyNumber          = 0;   # Last copy number of ...
 	my @potentialNonViableKeys  = ();
-	my @forsureNonViableKeys    = ();
+	my $forsureNonViableKeys    = {};
 	my $result = `cat "$fileName" | selitem -iC -oCmI 2>/dev/null`;
 	my @entireList = split( '\n', $result );
 	for my $line  ( sort( @entireList ) )
@@ -609,8 +597,8 @@ sub findNonViableTitles
 			{
 				for my $nonViableRecord ( @potentialNonViableKeys )
 				{
-					print "NON-VIABLE: $nonViableRecord" if ( $opt{ 'D' });
-					push( @forsureNonViableKeys, $nonViableRecord );
+					print "NON-VIABLE: $nonViableRecord" if ( $opt{ 'd' });
+					$forsureNonViableKeys->{ $nonViableRecord } = 1;
 				}
 			}
 			$viableLocationCount = 0;
@@ -641,17 +629,20 @@ sub findNonViableTitles
 	{
 		for my $nonViableRecord ( @potentialNonViableKeys )
 		{
-			print "NON-VIABLE: $nonViableRecord" if ( $opt{ 'D' });
-			push( @forsureNonViableKeys, $nonViableRecord );
+			print "NON-VIABLE: $nonViableRecord" if ( $opt{ 'd' });
+			$forsureNonViableKeys->{ $nonViableRecord } = 1;
 		}
 	}
 	undef @potentialNonViableKeys;
 	# create a result set.
-	for  my $key ( @forsureNonViableKeys ) 
+	while( my ($key, $v) = each %$forsureNonViableKeys ) 
 	{
 		$nonViableItemKeyString .= "$key";
 	}
-	undef @forsureNonViableKeys;
+	for ( keys %$forsureNonViableKeys )
+    {
+        delete $forsureNonViableKeys->{$_};
+    }
 	return $nonViableItemKeyString;
 }
 
@@ -693,21 +684,22 @@ sub markItems( $$ )
 	elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { $results = `cat $tmpFileName | selhold -t"T" -iC -j"ACTIVE" -oI  2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_COPY_HOLDS" )     { $results = `cat $tmpFileName | selhold -t"C" -iC -j"ACTIVE" -oI  2>/dev/null`; }
 	else  { print "skipping: '$keyWord'\n" if ( $opt{'d'} ); return; }
-	my @itemList  = split( "\n", $results );
+	my @itemList  = split( '\n', $results );
 	print "completed, ".scalar( @itemList )." related hits\n" if ( $opt{'d'} );
 	foreach my $itemKey ( @itemList )
 	{
-		chomp( $itemKey );
-		# some commands only take a cat key and produce many results with cat keys that don't match. Only update the
-		# values of cat keys that match.
-		next if ( not $discardHashRef->{ $itemKey } );
-		if    ( $keyWord eq "LAST_COPY" )           { $discardHashRef->{ $itemKey } |= $LCPY; }
-		elsif ( $keyWord eq "WITH_BILLS" )          { $discardHashRef->{ $itemKey } |= $BILL; }
-		elsif ( $keyWord eq "WITH_ORDERS" )         { $discardHashRef->{ $itemKey } |= $ORDR; }
-		elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $discardHashRef->{ $itemKey } |= $SCTL; }
-		elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { $discardHashRef->{ $itemKey } |= $HTIT; }
-		elsif ( $keyWord eq "WITH_COPY_HOLDS" )  	{ $discardHashRef->{ $itemKey } |= $HCPY; }
-		else  { ; }
+		# some commands only take a cat key and produce many results with item keys that don't match. This is especially
+		# true for test data sets. Only update the values of item keys that match.
+		if ( exists $discardHashRef->{ $itemKey } )
+		{
+			if    ( $keyWord eq "LAST_COPY" )           { $discardHashRef->{ $itemKey } |= $LCPY; }
+			elsif ( $keyWord eq "WITH_BILLS" )          { $discardHashRef->{ $itemKey } |= $BILL; }
+			elsif ( $keyWord eq "WITH_ORDERS" )         { $discardHashRef->{ $itemKey } |= $ORDR; }
+			elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $discardHashRef->{ $itemKey } |= $SCTL; }
+			elsif ( $keyWord eq "WITH_TITLE_HOLDS" )    { $discardHashRef->{ $itemKey } |= $HTIT; }
+			elsif ( $keyWord eq "WITH_COPY_HOLDS" )  	{ $discardHashRef->{ $itemKey } |= $HCPY; }
+			else  { ; }
+		}
 	}
 }
 
@@ -842,8 +834,7 @@ sub init()
 	{
 		# Get a list of items from the DISCARD location.
 		my $itemListResults    = `selitem -m"DISCARD" -oI 2>/dev/null`;
-		
-		my @itemKeyBarcodeList = split( "\n", $itemListResults );
+		my @itemKeyBarcodeList = split( '\n', $itemListResults );
 		my $discardHashRef     = {};
 		foreach my $line ( @itemKeyBarcodeList )
 		{
@@ -851,12 +842,7 @@ sub init()
 			$discardHashRef->{ "$catKey|$callSeq|$copyNumber|" } = $DISC;
 		}
 		# write the file that API calls will work against.
-		open( TMP, ">$tmpFileName" ) or die "Error writing to '$tmpFileName': $!\n";
-		for my $key ( keys %$discardHashRef )
-		{
-			print TMP "$key\n";
-		}
-		close( TMP );
+		writeTable( $tmpFileName, $discardHashRef );
 		# mark the items with against which policy they offend.
 		markItems( "LAST_COPY", $discardHashRef );
 		markItems( "WITH_BILLS", $discardHashRef );
