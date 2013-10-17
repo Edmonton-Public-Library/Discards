@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.18 - Normalize functions. 
 #          3.17.01 - Merged code from test bench discardlastcopy.pl. 
 #          3.17 - Bug fix for incorrect recording of discard types per file. 
 #          3.16 - Bug fix for incomplete selection of last viable copy. 
@@ -105,7 +106,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.17.02";
+my $VERSION               = "3.18";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -205,7 +206,7 @@ sub writeTable( $$ )
 	my $fileName = shift;
 	my $table    = shift;
 	open TABLE, ">$fileName" or die "**Error: discard serialization error writing '$fileName' $!\n";
-	for my $key ( keys %$table )
+	for my $key ( sort keys %$table )
 	{
 		print TABLE "$key\n";
 	}
@@ -438,7 +439,13 @@ sub selectReportPrepareCardTransactions( $ )
 	my $cardKey        = shift;
 	# return 555; # Use this to test return bogus results for reports and finished discard file.
 	my $discardHashRef = getDiscardedItemsFromCard( $cardKey, $discardRetentionPeriod );
-	$discardHashRef    = sortSelectedItems( $discardHashRef );
+	markItems( "LAST_COPY", $discardHashRef );
+	markItems( "WITH_BILLS", $discardHashRef );
+	markItems( "WITH_ORDERS", $discardHashRef );
+	markItems( "ARE_ACCOUNTABLE", $discardHashRef );
+	markItems( "UNDER_SERIAL_CONTROL", $discardHashRef );
+	markItems( "WITH_TITLE_HOLDS", $discardHashRef );
+    markItems( "WITH_COPY_HOLDS", $discardHashRef );
 	my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 	print "Total discards to process: $totalDiscards items.\n" if ( $opt{'d'} );
 	# move all discarded items to location DISCARD.
@@ -460,7 +467,13 @@ sub selectReportPrepareItemTransactions( $$ )
 	my $convertedCardsHashRef     = shift;
 	# return 555; # Use this to test return bogus results for reports and finished discard file.
 	my $discardHashRef = getItemsFromLongCheckedOutList( $longCheckedOutDiscardFile, $convertedCardsHashRef );
-	$discardHashRef    = sortSelectedItems( $discardHashRef );
+	markItems( "LAST_COPY", $discardHashRef );
+	markItems( "WITH_BILLS", $discardHashRef );
+	markItems( "WITH_ORDERS", $discardHashRef );
+	markItems( "ARE_ACCOUNTABLE", $discardHashRef );
+	markItems( "UNDER_SERIAL_CONTROL", $discardHashRef );
+	markItems( "WITH_TITLE_HOLDS", $discardHashRef );
+    markItems( "WITH_COPY_HOLDS", $discardHashRef );
 	my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 	my $listSize       = getLongCheckedOutListSize();
 	print "Total discards to process: $totalDiscards of $listSize items.\n" if ( $opt{'d'} );
@@ -479,30 +492,6 @@ sub getLongCheckedOutListSize()
 	$count++ while (<LIST>);
 	close( LIST );
 	return $count;
-}
-
-# Produces a hash of item keys for DISCARD conversion marking each item with the code 
-# for exclusion. If the code is zero the item is cleared for conversion and removal.
-# param:  hash ref of discard cards.
-# return: hash reference of item keys -> exclude code where:
-sub sortSelectedItems( $ )
-{
-	my $discardHashRef = shift;
-	open( TMP, ">>$tmpFileName" ) or die "Error writing to '$tmpFileName': $!\n";
-	for my $key ( keys %$discardHashRef )
-	{
-        print TMP "$key\n";
-    }
-	close( TMP );
-	# now set the bits for each of the DISCARD business rules.
-    markItems( "LAST_COPY", $discardHashRef );
-	markItems( "WITH_BILLS", $discardHashRef );
-	markItems( "WITH_ORDERS", $discardHashRef );
-	markItems( "ARE_ACCOUNTABLE", $discardHashRef );
-	markItems( "UNDER_SERIAL_CONTROL", $discardHashRef );
-	markItems( "WITH_TITLE_HOLDS", $discardHashRef );
-    markItems( "WITH_COPY_HOLDS", $discardHashRef );
-	return $discardHashRef;
 }
 
 # Applys library discard policies to the discarded items and reports the
@@ -545,26 +534,6 @@ sub reportAppliedPolicies
 	return scalar( keys( %$discardHashRef ) );
 }
 
-# Reads the contents of a file into a hash reference.
-# param:  file name string - path of file to write to.
-# return: hash reference - table data.
-sub readTable( $ )
-{
-	my ( $fileName ) = shift;
-	my ( $table )    = {};
-	if ( -e $fileName )
-	{
-		open TABLE, "<$fileName" or die "readTable Serialization error reading '$fileName' $!\n";
-		while ( <TABLE> )
-		{
-			chomp;
-			$table->{ $_ } = 1;
-		}
-		close TABLE;
-	}
-	return $table;
-}
-
 # This function finds all the siblings of the argument item key, 
 # that are mutually inaccessible, that is, a family of items that
 # are all in inaccessible locations of DAMAGE, LOST, LOST-ASSUM, 
@@ -586,6 +555,7 @@ sub findNonViableTitles
 	my $lastCopyNumber          = 0;   # Last copy number of ...
 	my @potentialNonViableKeys  = ();
 	my $forsureNonViableKeys    = {};
+	# Get all the items for all the titles associated with the discarded item keys.
 	my $result = `cat "$fileName" | selitem -iC -oCmI 2>/dev/null`;
 	my @entireList = split( '\n', $result );
 	for my $line  ( sort( @entireList ) )
@@ -832,6 +802,20 @@ sub init()
 	# Creates lists of items left in location DISCARD catagorized by the policy they offend.
 	if ( $opt{'o'} )
 	{
+		# Non-viable locations are set here.
+		if ( $opt{ 'l' } )
+		{
+			# looks like:
+			# -l"DAMAGE,LOST,LOST-ASSUM,LOST-CLAIM".
+			# needs to be made into:
+			# my @NON_VIABLE_LOCATIONS  = ( "DISCARD", "DAMAGE", "LOST", "LOST-ASSUM", "LOST-CLAIM" );
+			my @additionalLocations = split( ',', $opt{ 'l' } );
+			foreach my $loc ( @additionalLocations )
+			{
+				push( @NON_VIABLE_LOCATIONS, $loc );
+			}
+			print "@NON_VIABLE_LOCATIONS\n"
+		}
 		# Get a list of items from the DISCARD location.
 		my $itemListResults    = `selitem -m"DISCARD" -oI 2>/dev/null`;
 		my @itemKeyBarcodeList = split( '\n', $itemListResults );
@@ -855,20 +839,6 @@ sub init()
 		my $totalDiscards  = reportAppliedPolicies( $discardHashRef, @EPLPreservePolicies );
 		print "Total DISCARD location total: $totalDiscards.\n";
 		exit( 0 );
-	}
-	# Non-viable locations are set here.
-	if ( $opt{ 'l' } )
-	{
-		# looks like:
-		# -l"DAMAGE,LOST,LOST-ASSUM,LOST-CLAIM".
-		# needs to be made into:
-		# my @NON_VIABLE_LOCATIONS  = ( "DISCARD", "DAMAGE", "LOST", "LOST-ASSUM", "LOST-CLAIM" );
-		my @additionalLocations = split( ',', $opt{ 'l' } );
-		foreach my $loc ( @additionalLocations )
-		{
-			push( @NON_VIABLE_LOCATIONS, $loc );
-		}
-		print "@NON_VIABLE_LOCATIONS\n"
 	}
 }
 
