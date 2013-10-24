@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.18.01 - Fix bug that wasn't testing or producing sorted files. 
 #          3.18 - Normalize functions. 
 #          3.17.01 - Merged code from test bench discardlastcopy.pl. 
 #          3.17 - Bug fix for incorrect recording of discard types per file. 
@@ -106,7 +107,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.18";
+my $VERSION               = "3.18.01";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -439,6 +440,7 @@ sub selectReportPrepareCardTransactions( $ )
 	my $cardKey        = shift;
 	# return 555; # Use this to test return bogus results for reports and finished discard file.
 	my $discardHashRef = getDiscardedItemsFromCard( $cardKey, $discardRetentionPeriod );
+	writeTable( $tmpFileName, $discardHashRef );
 	markItems( "LAST_COPY", $discardHashRef );
 	markItems( "WITH_BILLS", $discardHashRef );
 	markItems( "WITH_ORDERS", $discardHashRef );
@@ -467,6 +469,7 @@ sub selectReportPrepareItemTransactions( $$ )
 	my $convertedCardsHashRef     = shift;
 	# return 555; # Use this to test return bogus results for reports and finished discard file.
 	my $discardHashRef = getItemsFromLongCheckedOutList( $longCheckedOutDiscardFile, $convertedCardsHashRef );
+	writeTable( $tmpFileName, $discardHashRef );
 	markItems( "LAST_COPY", $discardHashRef );
 	markItems( "WITH_BILLS", $discardHashRef );
 	markItems( "WITH_ORDERS", $discardHashRef );
