@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.18.02 - Add switch to select items checked out to discard in days. 
 #          3.18.01 - Fix bug that wasn't testing or producing sorted files. 
 #          3.18 - Normalize functions. 
 #          3.17.01 - Merged code from test bench discardlastcopy.pl. 
@@ -107,7 +108,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.18.01";
+my $VERSION               = "3.18.02";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -156,7 +157,7 @@ Over quota cards will stop a new list from being generated because the
 list can't be finished.
 *** WARNING ***
 
-usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path]
+usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path] [-h days]
 
  -B        : reports cards that have BARRED status.
  -b BRAnch : request a specific branch for discards. Selecting a branch must
@@ -167,6 +168,8 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path]
  -d        : turn on debugging output.
  -e        : write the current finished discard list to MS excel format.
              default name is 'Discard[yyyymmdd].xls'.
+ -h days   : process items from the given number of days ago (default 90). Like -h-60
+             for 60 days ago.
  -i path   : process items from an 'allow' list. See -y for 'deny' list processing.
  -l "LOC0,LOC1": Locations where items are considered non-viable. DISCARD is the default.
  -m "addrs": mail output to provided address(es).
@@ -192,6 +195,7 @@ example: $0 -ecq -n 1500 -m anisbet\@epl.ca -b MNA
 example: $0 -n 2500 -m anisbet\@epl.ca -i"./LCOdiscard.lst"
 example: $0 -n 2500 -m anisbet\@epl.ca -i"./item_keys_to_discard.lst" -y"./some_item_keys_to_keep.lst"
 example: $0 -i"./item_keys_to_discard.lst" -y"./some_item_keys_to_keep.lst" -l"DAMAGE,LOST,LOST-ASSUM,LOST-CLAIM".
+example: $0 -h60 -o -l"DAMAGE,LOST,LOST-ASSUM,LOST-CLAIM".
 Version: $VERSION
 
 EOF
@@ -772,7 +776,7 @@ sub resetDiscardList
 # return:
 sub init()
 {
-    my $opt_string = 'b:Bcdei:l:m:Mn:oQrRt:xy:';
+    my $opt_string = 'b:Bcdeh:i:l:m:Mn:oQrRt:xy:';
     getopts( "$opt_string", \%opt ) or usage();
     usage() if ($opt{'x'});                            # User needs help
     $targetDiscardItemCount = $opt{'n'} if ($opt{'n'}); # User set n
@@ -781,6 +785,15 @@ sub init()
         resetDiscardList();
 		exit( 1 );
     }
+	# This is not good we duplicate code in -o below, but -o operates on it's own switch set.
+	if ( $opt{ 'h' } )
+	{
+		my $myDaysAgo = $opt{ 'h' };
+		if ( $myDaysAgo =~ m/\-?\d{1,}/ )
+		{
+			chomp( $discardRetentionPeriod  = `transdate -d$myDaysAgo` );
+		}
+	}
 	if ( $opt{'t'} )
 	{
 		# cleanup files that are dangerous to have around: $requestFile, $tmpFileName.
@@ -819,8 +832,27 @@ sub init()
 			}
 			print "@NON_VIABLE_LOCATIONS\n"
 		}
-		# Get a list of items from the DISCARD location.
-		my $itemListResults    = `selitem -m"DISCARD" -oI 2>/dev/null`;
+		my $itemListResults = "";
+		if ( $opt{ 'h' } )
+		{
+			my $myDaysAgo = $opt{ 'h' };
+			if ( $myDaysAgo =~ m/\-?\d{1,}/ )
+			{
+				chomp( $discardRetentionPeriod  = `transdate -d$myDaysAgo` );
+				$itemListResults = `selitem -m"DISCARD" -n">$discardRetentionPeriod" -oI 2>/dev/null`;
+			}
+			else 
+			{
+				# User entered a date that didn't work.
+				print STDERR "Error: Invalid date: '" . $opt{ 'h' } . "\n";
+				usage();
+			}
+		}
+		else
+		{
+			# Get a list of items from the DISCARD location.
+			$itemListResults    = `selitem -m"DISCARD" -oI 2>/dev/null`;
+		}
 		my @itemKeyBarcodeList = split( '\n', $itemListResults );
 		my $discardHashRef     = {};
 		foreach my $line ( @itemKeyBarcodeList )
