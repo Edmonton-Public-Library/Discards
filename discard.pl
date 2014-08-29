@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.19.02 - Mail now uses full name of script rather than hard coded value. 
 #          3.19.01 - Deprecated the -l switch as it is no longer required as of REV. 3.19. 
 #          3.19 - Revision to last copy selection. 
 #          3.18.02 - Add switch to select items checked out to discard in days. 
@@ -110,7 +111,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.19.01";
+my $VERSION               = "3.19.02";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -1010,7 +1011,7 @@ sub mail( $$$ )
     #-- send an email to user@localhost
     my ( $subject, $addressees, $mail ) = @_;
     open(MAIL, "| /usr/bin/mailx -s $subject $addressees") || die "mailx failed: $!\n";
-    print MAIL "$mail\nSigned: Discard.pl\n";
+    print MAIL "$mail\nSigned: $0\n";
     close(MAIL);
 }
 
