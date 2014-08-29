@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.19.01 - Deprecated the -l switch as it is no longer required as of REV. 3.19. 
 #          3.19 - Revision to last copy selection. 
 #          3.18.02 - Add switch to select items checked out to discard in days. 
 #          3.18.01 - Fix bug that wasn't testing or producing sorted files. 
@@ -109,7 +110,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.19";
+my $VERSION               = "3.19.01";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -141,7 +142,7 @@ my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the dis
 my $requestFile           = qq{$pwdDir/DISCARD_TXRQ.cmd};
 my $responseFile          = qq{$pwdDir/DISCARD_TXRS.log};
 my $excelFile             = qq{$pwdDir/Discards$today.xls};
-my @NON_VIABLE_LOCATIONS  = qw( DISCARD );
+# my @NON_VIABLE_LOCATIONS  = qw( DISCARD );
 
 #
 # Message about this program and how to use it
@@ -172,7 +173,7 @@ usage: $0 [-bBceMorRQx] [-n number_items] [-m email] [-t cardKey] [-i path] [-h 
  -h days   : process items from the given number of days ago (default 90). Like -h-60
              for 60 days ago.
  -i path   : process items from an 'allow' list. See -y for 'deny' list processing.
- -l "LOC0,LOC1": Locations where items are considered non-viable. DISCARD is the default.
+ -l "LOC0,LOC1": *DEPRECATED* Locations where items are considered non-viable. DISCARD is the default.
  -m "addrs": mail output to provided address(es).
  -M        : reports cards that are incorrectly identified with DISCARD profile.
  -n number : sets the upper limit of the number of discards to process.
@@ -561,19 +562,6 @@ sub markItems( $$ )
 {
 	my ( $keyWord, $discardHashRef ) = @_;
 	my $results  = "";
-	# This next line is naive. It returns call nums that have less than 2 copies for a callnum!
-	# A title can have several call numbers. Some on order with copies less than two copies, but we really need 
-	# are the Titles with less than 2 copies. head -1 DISCARD_LCHT.lst | selcallnum    -iC -c"<2"     -oC | sort | uniq -c
-	# produces:    8 1016142|
-	# We don't need this one because the title has 8 copies.
-	# cat DISCARD_LCHT.lst | selcatalog -iC -n"<2" -oCS | selcallnum  -iN -c"<2" -oNS
-	# prints out the cat key we could use that to do a lookup for items keys that start with that catalog key.
-	# But even that will give you on order copies, we need to take the ones above that have count 0 then selcatalog
-	# if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcallnum    -iN -c"<2"     -oNS 2>/dev/null`; }
-	# This line finds all of the literally last items on a title. This works but we need something that finds last VIABLE item on a title.
-	# if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcatalog -iC -n"<2" -oCS | selcallnum  -iN -c"<2" -oNS 2>/dev/null`; }
-	# This computes the last Viable item of a title.
-	# if    ( $keyWord eq "LAST_COPY" )           { $results = findNonViableTitles( $tmpFileName, @NON_VIABLE_LOCATIONS ); }
 	# Last Copy is a misnomer; I really mean 'last viable copy' or 'no more circulate-able copies'. Selcatalog
 	# will do that for us. The -z is the flag to select on visible callnums. A callnum is not visible if it
 	# all of its items are in shadowed locations. If any one of its items are not shadowed, then it becomes
@@ -747,16 +735,7 @@ sub init()
 		# Non-viable locations are set here.
 		if ( $opt{ 'l' } )
 		{
-			# looks like:
-			# -l"DAMAGE,LOST,LOST-ASSUM,LOST-CLAIM".
-			# needs to be made into:
-			# my @NON_VIABLE_LOCATIONS  = ( "DISCARD", "DAMAGE", "LOST", "LOST-ASSUM", "LOST-CLAIM" );
-			my @additionalLocations = split( ',', $opt{ 'l' } );
-			foreach my $loc ( @additionalLocations )
-			{
-				push( @NON_VIABLE_LOCATIONS, $loc );
-			}
-			print "@NON_VIABLE_LOCATIONS\n"
+			print "*** Warning deprecated. Use of '-l' switch has no effect. ***\n"
 		}
 		my $itemListResults = "";
 		if ( $opt{ 'h' } )
