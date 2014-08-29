@@ -2,7 +2,7 @@
 SERVER=eplapp.library.ualberta.ca
 # SERVER=edpl-t.library.ualberta.ca
 USER=sirsi
-REMOTE=~/Unicorn/EPLwork/anisbet/
+REMOTE=~/Unicorn/EPLwork/cronjobscripts/Discards/
 LOCAL=~/projects/discards/
 APP=discard.pl
 

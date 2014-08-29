@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.19 - Revision to last copy selection. 
 #          3.18.02 - Add switch to select items checked out to discard in days. 
 #          3.18.01 - Fix bug that wasn't testing or producing sorted files. 
 #          3.18 - Normalize functions. 
@@ -108,7 +109,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.18.02";
+my $VERSION               = "3.19";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -541,88 +542,6 @@ sub reportAppliedPolicies
 	return scalar( keys( %$discardHashRef ) );
 }
 
-# This function finds all the siblings of the argument item key, 
-# that are mutually inaccessible, that is, a family of items that
-# are all in inaccessible locations of DAMAGE, LOST, LOST-ASSUM, 
-# or LOST-CLAIM.
-# param:  file of item keys. 
-# params: all other params are the list of non-viable locations.
-#         DISCARD,DAMAGE,LOST,LOST-ASSUM, and LOST-CLAIM
-# return: a string of item keys separated by a '\n'.
-sub findNonViableTitles
-{
-	my $fileName = shift;
-	# It will be faster to look up non viable locations if we put them in a hash.
-	# Non-viable lookup time drops to O(1).
-	my %nonViableLocations      = map { $_ => 1 } @_;
-	my $nonViableItemKeyString  = "";  # Contains the entire list of item keys that are not viable.
-	my $viableLocationCount     = 0;   # count of viable locations for the current title.
-	my $lastCKey                = 0;   # Item key of the last iteration.
-	my $lastSequenceNumber      = 0;   # Call sequence of ...
-	my $lastCopyNumber          = 0;   # Last copy number of ...
-	my @potentialNonViableKeys  = ();
-	my $forsureNonViableKeys    = {};
-	# Get all the items for all the titles associated with the discarded item keys.
-	my $result = `cat "$fileName" | selitem -iC -oCmI 2>/dev/null`;
-	my @entireList = split( '\n', $result );
-	for my $line  ( sort( @entireList ) )
-	{
-		my ( $cKey, $loc, $catKey, $seqNumber, $itemNumber ) = split( '\|', $line );
-		if ( $lastCKey != $cKey && $lastCKey != 0 )
-		{
-			if ( $viableLocationCount == 0 )
-			{
-				for my $nonViableRecord ( @potentialNonViableKeys )
-				{
-					print "NON-VIABLE: $nonViableRecord" if ( $opt{ 'd' });
-					$forsureNonViableKeys->{ $nonViableRecord } = 1;
-				}
-			}
-			$viableLocationCount = 0;
-			undef @potentialNonViableKeys;
-			@potentialNonViableKeys = ();
-		}
-		$lastCKey           = $catKey;
-		$lastSequenceNumber = $seqNumber;
-		$lastCopyNumber     = $itemNumber;
-		# if the item's current location is not in the non-viable location list then it 
-		# must be in a viable location, and there for there must be at least one viable copy 
-		# left in the catalogue.
-		if( exists( $nonViableLocations{ $loc } ) )
-		{
-			# save the item key for potentially return list.
-			if ( $loc eq "DISCARD" ) # only save the discard keys.
-			{
-				push( @potentialNonViableKeys, "$lastCKey|$lastSequenceNumber|$lastCopyNumber|\n" );
-			}
-		}
-		else
-		{
-			$viableLocationCount += 1;
-		}
-	}
-	# do the last iteration
-	if ( $viableLocationCount == 0 )
-	{
-		for my $nonViableRecord ( @potentialNonViableKeys )
-		{
-			print "NON-VIABLE: $nonViableRecord" if ( $opt{ 'd' });
-			$forsureNonViableKeys->{ $nonViableRecord } = 1;
-		}
-	}
-	undef @potentialNonViableKeys;
-	# create a result set.
-	while( my ($key, $v) = each %$forsureNonViableKeys ) 
-	{
-		$nonViableItemKeyString .= "$key";
-	}
-	for ( keys %$forsureNonViableKeys )
-    {
-        delete $forsureNonViableKeys->{$_};
-    }
-	return $nonViableItemKeyString;
-}
-
 # Marks items that are not to be discarded. Any value that is greater than 0 will be preserved.
 # Values are bit ordered so the reason of the disqualification can be tested.
 # 1  = good to DISCARD
@@ -654,7 +573,14 @@ sub markItems( $$ )
 	# This line finds all of the literally last items on a title. This works but we need something that finds last VIABLE item on a title.
 	# if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcatalog -iC -n"<2" -oCS | selcallnum  -iN -c"<2" -oNS 2>/dev/null`; }
 	# This computes the last Viable item of a title.
-	if    ( $keyWord eq "LAST_COPY" )           { $results = findNonViableTitles( $tmpFileName, @NON_VIABLE_LOCATIONS ); }
+	# if    ( $keyWord eq "LAST_COPY" )           { $results = findNonViableTitles( $tmpFileName, @NON_VIABLE_LOCATIONS ); }
+	# Last Copy is a misnomer; I really mean 'last viable copy' or 'no more circulate-able copies'. Selcatalog
+	# will do that for us. The -z is the flag to select on visible callnums. A callnum is not visible if it
+	# all of its items are in shadowed locations. If any one of its items are not shadowed, then it becomes
+	# a visible call num. Therefore given an arbitrary but specific item key we can find any title with 0
+	# visible call nums, because if there is a visible call num, there is necessarily a circulate-able item
+	# attached to the tile.
+	if    ( $keyWord eq "LAST_COPY" )           { $results = `cat $tmpFileName | selcatalog    -iC -z"<1"     -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_BILLS" )          { $results = `cat $tmpFileName | selbill       -iI -b">0.00"  -oI  2>/dev/null`; }
 	elsif ( $keyWord eq "WITH_ORDERS" )         { $results = `cat $tmpFileName | selorderlin   -iC            -oCS 2>/dev/null`; }
 	elsif ( $keyWord eq "UNDER_SERIAL_CONTROL" ){ $results = `cat $tmpFileName | selserctl     -iC            -oCS 2>/dev/null`; }
