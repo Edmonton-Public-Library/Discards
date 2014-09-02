@@ -57,6 +57,7 @@
 # Author:  Andrew Nisbet
 # Date:    April 10, 2012
 # Rev:     
+#          3.19.03 - Fixed bug in reportAppliedPolicies() that incorrectly wrote tables user's current directory. 
 #          3.19.02 - Mail now uses full name of script rather than hard coded value. 
 #          3.19.01 - Deprecated the -l switch as it is no longer required as of REV. 3.19. 
 #          3.19 - Revision to last copy selection. 
@@ -111,7 +112,7 @@ $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicor
 $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
 ###############################################
 
-my $VERSION               = "3.19.02";
+my $VERSION               = "3.19.03";
 my $DISC                  = 0b00000001;
 my $LCPY                  = 0b00000010;
 my $BILL                  = 0b00000100;
@@ -540,7 +541,7 @@ sub reportAppliedPolicies
 	{
 		$flaggedCards->{ "$key$v|" } = 1;
 	}
-	writeTable( "DISCARD_COMP.lst", $flaggedCards );
+	writeTable( "$pwdDir/DISCARD_COMP.lst", $flaggedCards );
 	return scalar( keys( %$discardHashRef ) );
 }
 
