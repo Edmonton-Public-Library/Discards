@@ -94,7 +94,7 @@
 ########################################################################
 BEGIN # Required for any script that requires the use of epl.pm or other custom modules.
 {
-	push @INC, "/s/sirsi/Unicorn/EPLwork/epl_perl_libs";      # This is for running 
+	push @INC, "/software/EDPL/Unicorn/EPLwork/epl_perl_libs";      # This is for running 
 	push @INC, "/home/ilsdev/projects/epl_perl_libs"; # This is so we can test compile and run on dev machine
 }
 use strict;
@@ -117,8 +117,8 @@ use POSIX qw/ceil/;
 # without assuming any environment settings and we need to use sirsi's.
 ###############################################
 # *** Edit these to suit your environment *** #
-# $ENV{'PATH'} = ":/s/sirsi/Unicorn/Bincustom:/s/sirsi/Unicorn/Bin:/s/sirsi/Unicorn/Search/Bin:/usr/bin";
-# $ENV{'UPATH'} = "/s/sirsi/Unicorn/Config/upath";
+# $ENV{'PATH'} = ":/software/EDPL/Unicorn/Bincustom:/software/EDPL/Unicorn/Bin:/software/EDPL/Unicorn/Search/Bin:/usr/bin";
+# $ENV{'UPATH'} = "/software/EDPL/Unicorn/Config/upath";
 ###############################################
 
 my $VERSION               = "3.19.03";
@@ -146,7 +146,7 @@ my $C_RECOMMEND           = 0b010000; # recommended cards get selected for conve
 my $C_CONVERTED           = 0b100000;
 chomp( my $today          = `transdate -d+0` );
 chomp( my $tmpDir         = `getpathname tmp` );
-my $pwdDir                = qq{/s/sirsi/Unicorn/EPLwork/cronjobscripts/Discards};
+my $pwdDir                = qq{/software/EDPL/Unicorn/EPLwork/cronjobscripts/Discards};
 # my $pwdDir                = qq{./};
 my $tmpFileName           = qq{$tmpDir/tmp_a};
 my $discardsFile          = qq{$pwdDir/finished_discards.txt}; # Name of the discards file.
