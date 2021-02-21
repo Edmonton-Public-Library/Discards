@@ -1,5 +1,5 @@
 # copies most rescent files from eplapp for updating to git.
-SERVER=eplapp.library.ualberta.ca
+SERVER=edpl.sirsidynix.net
 # SERVER=edpl-t.library.ualberta.ca
 USER=sirsi
 REMOTE=~/Unicorn/EPLwork/cronjobscripts/Discards/
